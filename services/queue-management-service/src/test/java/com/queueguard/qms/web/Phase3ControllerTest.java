@@ -177,6 +177,142 @@ class Phase3ControllerTest {
     }
 
     @Test
+    void candidateRoundControllerRegistersDecidesAndProgressesUsingQueueEntryState()
+            throws Exception {
+        long profileId = insertProfile(STUDENT_ID);
+        long driveId = insertDrive("PUBLISHED");
+        long queueId = insertOpenQueueConfiguration("INTERVIEW");
+        long roundId = insertRound(driveId, queueId);
+        jdbc.update("update interview_rounds set status = 'OPEN' where id = ?", roundId);
+        insertInterviewerAssignment(roundId, INTERVIEWER_ID);
+        long applicationId = insertAcceptedApplication(driveId, profileId, STUDENT_ID);
+
+        mockMvc.perform(post(orgPath("/rounds/" + roundId + "/applications/"
+                        + applicationId + "/register"))
+                        .header("Authorization", bearer(STUDENT_ID)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.success").value(false));
+
+        mockMvc.perform(post(orgPath("/rounds/" + roundId + "/applications/"
+                        + applicationId + "/register"))
+                        .header("Authorization", bearer(MANAGER_ID)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.id").isNumber())
+                .andExpect(jsonPath("$.data.result").doesNotExist())
+                .andExpect(jsonPath("$.data.queueEntry.status").value("WAITING"))
+                .andExpect(jsonPath("$.data.queueEntryId").isNumber());
+
+        long candidateRoundId = jdbc.queryForObject(
+                "select id from candidate_rounds where organization_id = ? "
+                        + "and candidate_application_id = ? and interview_round_id = ?",
+                Long.class, organizationId, applicationId, roundId);
+        Long queueEntryId = jdbc.queryForObject(
+                "select queue_entry_id from candidate_rounds where id = ?",
+                Long.class, candidateRoundId);
+
+        mockMvc.perform(get(orgPath("/rounds/" + roundId + "/applications/" + applicationId))
+                        .header("Authorization", bearer(STUDENT_ID)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.id").value(candidateRoundId));
+        mockMvc.perform(get(orgPath("/rounds/" + roundId + "/applications/" + applicationId))
+                        .header("Authorization", bearer(OTHER_STUDENT_ID)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.success").value(false));
+        long otherOrganizationId = jdbc.queryForObject("""
+                insert into organizations
+                    (name, organization_type, status, created_at, updated_at)
+                values ('Other Candidate Round Org', 'COLLEGE', 'ACTIVE', now(), now())
+                returning id
+                """, Long.class);
+        mockMvc.perform(get("/api/v1/organizations/" + otherOrganizationId
+                        + "/rounds/" + roundId + "/applications/" + applicationId)
+                        .header("Authorization", bearer(MANAGER_ID)))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.success").value(false));
+
+        mockMvc.perform(post(orgPath("/rounds/" + roundId + "/applications/"
+                        + applicationId + "/register"))
+                        .header("Authorization", bearer(MANAGER_ID)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.id").value(candidateRoundId));
+        org.junit.jupiter.api.Assertions.assertEquals(1, jdbc.queryForObject(
+                "select count(*) from queue_entries where organization_id = ?",
+                Integer.class, organizationId));
+
+        mockMvc.perform(post(orgPath("/applications/" + applicationId + "/rounds/"
+                        + roundId + "/progress"))
+                        .header("Authorization", bearer(MANAGER_ID)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.success").value(false));
+
+        mockMvc.perform(post(orgPath("/applications/" + applicationId + "/rounds/"
+                        + roundId + "/qualify"))
+                        .header("Authorization", bearer(MANAGER_ID))
+                        .contentType("application/json")
+                        .content("{\"reason\":\"Passed interview\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.success").value(false));
+
+        jdbc.update("update queue_entries set status = 'COMPLETED' where id = ?", queueEntryId);
+        mockMvc.perform(post(orgPath("/applications/" + applicationId + "/rounds/"
+                        + roundId + "/qualify"))
+                        .header("Authorization", bearer(INTERVIEWER_ID))
+                        .contentType("application/json")
+                        .content("{\"reason\":\"Passed interview\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.result").value("QUALIFIED"))
+                .andExpect(jsonPath("$.data.queueEntry.status").value("COMPLETED"))
+                .andExpect(jsonPath("$.data.decidedBy").value(INTERVIEWER_ID));
+
+        long nextRoundId = insertNextRound(driveId, "INTERVIEW2");
+        mockMvc.perform(post(orgPath("/applications/" + applicationId + "/rounds/"
+                        + roundId + "/progress"))
+                        .header("Authorization", bearer(MANAGER_ID)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.interviewRoundId").value(nextRoundId))
+                .andExpect(jsonPath("$.data.queueEntry.status").value("WAITING"));
+
+        mockMvc.perform(get(orgPath("/applications/" + applicationId + "/rounds"))
+                        .header("Authorization", bearer(STUDENT_ID)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data", hasSize(2)))
+                .andExpect(jsonPath("$.data[0].queueEntry.status").value("COMPLETED"))
+                .andExpect(jsonPath("$.data[1].queueEntry.status").value("WAITING"));
+
+        mockMvc.perform(get(orgPath("/applications/" + applicationId + "/rounds"))
+                        .header("Authorization", bearer(OTHER_STUDENT_ID)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.success").value(false));
+    }
+
+    @Test
+    void candidateRoundDecisionRoutesEnforceInterviewerAndManagerPermissions()
+            throws Exception {
+        long driveId = insertDrive("PUBLISHED");
+        long queueId = insertOpenQueueConfiguration("DECISIONS");
+        long roundId = insertRound(driveId, queueId);
+        jdbc.update("update interview_rounds set status = 'OPEN' where id = ?", roundId);
+        insertInterviewerAssignment(roundId, INTERVIEWER_ID);
+
+        assertDecisionRoute(driveId, roundId, 201L, "qualify", INTERVIEWER_ID, 200);
+        assertDecisionRoute(driveId, roundId, 202L, "disqualify", INTERVIEWER_ID, 200);
+        assertDecisionRoute(driveId, roundId, 203L, "hold", INTERVIEWER_ID, 200);
+
+        long selectApplicationId = insertCompletedCandidateRound(driveId, roundId, 204L);
+        String selectPath = orgPath("/applications/" + selectApplicationId
+                + "/rounds/" + roundId + "/select");
+        mockMvc.perform(post(selectPath)
+                        .header("Authorization", bearer(INTERVIEWER_ID)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.success").value(false));
+        mockMvc.perform(post(selectPath)
+                        .header("Authorization", bearer(MANAGER_ID)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.result").value("SELECTED"));
+    }
+
+    @Test
     void fullReplacementResourcesUsePutWhilePatchIsReservedForPartialOperations()
             throws Exception {
         long draftDriveId = insertDrive("DRAFT");
@@ -257,6 +393,8 @@ class Phase3ControllerTest {
         expectValidationFailure(post(orgPath("/rounds/" + insertRound(driveId, queueId)
                         + "/assignments"))
                 .content("{\"interviewerUserId\":0}"));
+        expectValidationFailure(post(orgPath("/applications/1/rounds/1/qualify"))
+                .content("{\"reason\":\"" + "x".repeat(2001) + "\"}"));
     }
 
     @Test
@@ -424,6 +562,80 @@ class Phase3ControllerTest {
                 Timestamp.from(now), Timestamp.from(now));
     }
 
+    private long insertOpenQueueConfiguration(String queueCode) {
+        Instant now = Instant.now();
+        return jdbc.queryForObject("""
+                insert into queue_configurations
+                    (organization_id, name, queue_code, queue_type, ordering_policy,
+                     status, priority_enabled, created_by, created_at, updated_at, version)
+                values (?, 'Interview queue', ?, 'GENERIC', 'FIFO',
+                        'OPEN', false, ?, ?, ?, 0)
+                returning id
+                """, Long.class, organizationId, queueCode, MANAGER_ID,
+                Timestamp.from(now), Timestamp.from(now));
+    }
+
+    private long insertNextRound(long driveId, String queueCode) {
+        long queueId = insertOpenQueueConfiguration(queueCode);
+        Instant now = Instant.now();
+        return jdbc.queryForObject("""
+                insert into interview_rounds
+                    (organization_id, placement_drive_id, queue_configuration_id,
+                     round_number, name, round_type, scheduled_start_at, scheduled_end_at,
+                     status, qualification_criteria, created_by, created_at, updated_at, version)
+                values (?, ?, ?, 2, 'Round 2', 'TECHNICAL', ?, ?, 'OPEN',
+                        'Interview criteria', ?, ?, ?, 0)
+                returning id
+                """, Long.class, organizationId, driveId, queueId,
+                Timestamp.from(now.plusSeconds(7200)), Timestamp.from(now.plusSeconds(10800)),
+                MANAGER_ID, Timestamp.from(now), Timestamp.from(now));
+    }
+
+    private long insertAcceptedApplication(long driveId, long profileId, long studentId) {
+        Instant now = Instant.now();
+        return jdbc.queryForObject("""
+                insert into candidate_applications
+                    (organization_id, placement_drive_id, application_number,
+                     eligibility_status, application_status, applied_at,
+                     candidate_profile_id, student_user_id, capacity_reserved_at,
+                     created_at, updated_at, version)
+                values (?, ?, ?, 'ELIGIBLE', 'ACCEPTED', ?, ?, ?, ?, ?, ?, 0)
+                returning id
+                """, Long.class, organizationId, driveId, studentId, Timestamp.from(now),
+                profileId, studentId, Timestamp.from(now), Timestamp.from(now),
+                Timestamp.from(now));
+    }
+
+    private long insertCompletedCandidateRound(long driveId, long roundId, long studentId)
+            throws Exception {
+        addMember(studentId, "MEMBER");
+        long profileId = insertProfile(studentId);
+        long applicationId = insertAcceptedApplication(driveId, profileId, studentId);
+        mockMvc.perform(post(orgPath("/rounds/" + roundId + "/applications/"
+                        + applicationId + "/register"))
+                        .header("Authorization", bearer(MANAGER_ID)))
+                .andExpect(status().isOk());
+        jdbc.update("""
+                update queue_entries
+                set status = 'COMPLETED'
+                where id = (select queue_entry_id from candidate_rounds
+                            where organization_id = ? and candidate_application_id = ?
+                              and interview_round_id = ?)
+                """, organizationId, applicationId, roundId);
+        return applicationId;
+    }
+
+    private void assertDecisionRoute(
+            long driveId, long roundId, long studentId, String decision,
+            long actorId, int expectedStatus) throws Exception {
+        long applicationId = insertCompletedCandidateRound(driveId, roundId, studentId);
+        mockMvc.perform(post(orgPath("/applications/" + applicationId
+                        + "/rounds/" + roundId + "/" + decision))
+                        .header("Authorization", bearer(actorId)))
+                .andExpect(status().is(expectedStatus))
+                .andExpect(jsonPath("$.success").value(true));
+    }
+
     private long insertRound(long driveId, long queueId) {
         Instant now = Instant.now();
         return jdbc.queryForObject("""
@@ -487,6 +699,7 @@ class Phase3ControllerTest {
                 "/api/v1/organizations/1/candidates/profiles/me",
                 "/api/v1/organizations/1/applications/me",
                 "/api/v1/organizations/1/rounds?status=DRAFT",
-                "/api/v1/organizations/1/assignments/me");
+                "/api/v1/organizations/1/assignments/me",
+                "/api/v1/organizations/1/rounds/1/candidates");
     }
 }

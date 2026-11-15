@@ -2,6 +2,7 @@ package com.queueguard.qms.dto;
 
 import com.queueguard.qms.domain.*;
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.queueguard.qms.dto.QueueDtos.QueueEntryView;
 import jakarta.validation.constraints.*;
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -169,6 +170,26 @@ public final class Phase3Dtos {
                     assignment.getInterviewerUserId(), assignment.getPanelName(),
                     assignment.getServicePoint(), assignment.getAssignedAt(),
                     assignment.getStatus(), assignment.getCreatedAt(), assignment.getUpdatedAt());
+        }
+    }
+
+    public record CandidateRoundDecisionRequest(@Size(max = 2000) String reason) {}
+
+    public record CandidateRoundView(
+            Long id, Long organizationId, Long candidateApplicationId, Long interviewRoundId,
+            Long placementDriveId, Long queueConfigurationId, Long queueEntryId,
+            CandidateRoundResult result, String decisionReason, Long decidedBy,
+            Instant decidedAt, QueueEntryView queueEntry, Instant createdAt, Instant updatedAt) {
+        public static CandidateRoundView from(CandidateRound candidateRound, QueueEntry queueEntry) {
+            return new CandidateRoundView(candidateRound.getId(),
+                    candidateRound.getOrganizationId(),
+                    candidateRound.getCandidateApplicationId(),
+                    candidateRound.getInterviewRoundId(), candidateRound.getPlacementDriveId(),
+                    candidateRound.getQueueConfigurationId(), candidateRound.getQueueEntryId(),
+                    candidateRound.getResult(), candidateRound.getDecisionReason(),
+                    candidateRound.getDecidedBy(), candidateRound.getDecidedAt(),
+                    QueueEntryView.from(queueEntry), candidateRound.getCreatedAt(),
+                    candidateRound.getUpdatedAt());
         }
     }
 }
