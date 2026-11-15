@@ -1,0 +1,53 @@
+# Java and Maven
+target/
+*.class
+*.jar
+*.war
+*.ear
+.mvn/timing.properties
+.mvn/wrapper/maven-wrapper.jar
+
+# Java IDEs
+.idea/
+*.iml
+.project
+.classpath
+.settings/
+.factorypath
+.vscode/
+
+# Python scripts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Operating-system files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Logs, reports, and temporary files
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+*.swp
+coverage/
+
+# Local configuration and secrets (commit only explicit examples)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+docker-compose.override.yml
+
+# Local Docker and application data
+pgdata/
+redisdata/

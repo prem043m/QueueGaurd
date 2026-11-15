@@ -1,0 +1,40 @@
+server:
+  port: ${SERVER_PORT:8084}
+
+spring:
+  application:
+    name: rate-limit-service
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:ratelimit_db}
+    username: ${DB_USER:queueguard}
+    password: ${DB_PASSWORD:queueguard}
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      timeout: 2s
+
+queueguard:
+  ratelimit:
+    base-limit-per-sec: ${RL_BASE_LIMIT_PER_SEC:10}
+    burst: ${RL_BURST:20}
+    user-limit-per-sec: ${RL_USER_LIMIT_PER_SEC:30}
+    user-burst: ${RL_USER_BURST:60}
+    strike-ban-threshold: ${RL_STRIKE_BAN_THRESHOLD:5}
+    ban-base-minutes: ${RL_BAN_BASE_MINUTES:1}
+    ban-max-minutes: ${RL_BAN_MAX_MINUTES:60}
+    strike-decay-sec: ${RL_STRIKE_DECAY_SEC:60}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+
+logging:
+  level:
+    com.queueguard: INFO

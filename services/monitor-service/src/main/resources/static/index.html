@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QueueGuard — Live Dashboard</title>
+<style>
+  :root {
+    --bg: #0b1220; --panel: #121c2e; --panel2: #182634; --text: #e6edf7;
+    --muted: #8b9bb4; --ok: #2ecc71; --bad: #e74c3c; --warn: #f39c12; --accent: #4da3ff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; padding: 24px; }
+  h1 { font-size: 22px; letter-spacing: .5px; }
+  h1 span { color: var(--accent); }
+  .sub { color: var(--muted); font-size: 13px; margin: 4px 0 20px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+  .card { background: var(--panel); border: 1px solid #22314a; border-radius: 12px; padding: 18px; }
+  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 1.2px; color: var(--muted); margin-bottom: 12px; }
+  .stat { display: flex; justify-content: space-between; padding: 7px 0; border-bottom: 1px solid #1c2a40; font-size: 14px; }
+  .stat:last-child { border-bottom: none; }
+  .stat b { font-weight: 600; }
+  .pill { padding: 3px 12px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+  .pill.up { background: rgba(46,204,113,.15); color: var(--ok); }
+  .pill.down { background: rgba(231,76,60,.15); color: var(--bad); }
+  .pill.unknown { background: rgba(139,155,180,.15); color: var(--muted); }
+  .meter { height: 10px; background: #1c2a40; border-radius: 999px; overflow: hidden; margin: 10px 0 4px; }
+  .meter > div { height: 100%; background: linear-gradient(90deg, var(--ok), var(--warn), var(--bad)); border-radius: 999px; transition: width .6s; }
+  .big { font-size: 34px; font-weight: 700; }
+  .muted { color: var(--muted); font-size: 12px; }
+  canvas { width: 100%; height: 120px; margin-top: 8px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #1c2a40; }
+  th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; }
+  .refresh { color: var(--muted); font-size: 12px; margin-top: 18px; }
+</style>
+</head>
+<body>
+  <h1>🛡️ <span>QueueGuard</span> — Distributed Queue Management</h1>
+  <div class="sub">Intelligent &amp; fault-tolerant queueing · concurrency control · adaptive per-IP rate limiting</div>
+
+  <div class="grid">
+    <div class="card">
+      <h2>System Load (drives adaptive rate limits)</h2>
+      <div class="big" id="loadScore">–</div>
+      <div class="meter"><div id="loadBar" style="width:0%"></div></div>
+      <div class="stat"><span class="muted">Queue depth</span><b id="qDepth">–</b></div>
+      <div class="stat"><span class="muted">Workers in-flight</span><b id="inFlight">–</b></div>
+      <div class="stat"><span class="muted">Error rate</span><b id="errRate">–</b></div>
+      <div class="stat"><span class="muted">p95 probe latency</span><b id="p95">–</b></div>
+    </div>
+
+    <div class="card">
+      <h2>Service Health</h2>
+      <table>
+        <thead><tr><th>Service</th><th>Status</th><th>Latency</th></tr></thead>
+        <tbody id="healthBody"></tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2>Load Timeline</h2>
+      <canvas id="chart" width="600" height="120"></canvas>
+      <div class="muted">last 30 samples · 0 = idle, 1 = saturated</div>
+    </div>
+  </div>
+
+  <div class="refresh">Auto-refreshes every 3 seconds · <span id="updated">–</span></div>
+
+<script>
+async function jget(url) {
+  const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+  return res.json();
+}
+
+function drawChart(scores) {
+  const canvas = document.getElementById('chart');
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width, h = canvas.height;
+  ctx.clearRect(0, 0, w, h);
+  ctx.strokeStyle = '#1c2a40';
+  for (let i = 0; i <= 4; i++) {
+    const y = h - (i / 4) * (h - 10) - 5;
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+  }
+  if (scores.length < 2) return;
+  ctx.beginPath();
+  scores.forEach((s, i) => {
+    const x = (i / (scores.length - 1)) * w;
+    const y = h - s * (h - 10) - 5;
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  ctx.strokeStyle = '#4da3ff';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+}
+
+async function refresh() {
+  try {
+    const ov = await jget('monitor/health-overview');
+    const data = ov.data || ov;
+    const body = document.getElementById('healthBody');
+    body.innerHTML = '';
+    (data.services || []).forEach(svc => {
+      const up = (svc.status || '').startsWith('UP');
+      const cls = svc.status === 'UNKNOWN' ? 'unknown' : (up ? 'up' : 'down');
+      body.innerHTML += `<tr><td>${svc.service}</td><td><span class="pill ${cls}">${svc.status}</span></td><td>${svc.latencyMs ?? '–'} ms</td></tr>`;
+    });
+
+    let load = data.load;
+    if (!load) {
+      const l = await jget('monitor/load');
+      load = l.data || l;
+    }
+    if (load && load.loadScore !== undefined && load.loadScore !== null) {
+      const score = load.loadScore;
+      document.getElementById('loadScore').textContent = (score * 100).toFixed(1) + '%';
+      document.getElementById('loadBar').style.width = (score * 100).toFixed(1) + '%';
+      document.getElementById('qDepth').textContent = load.queueDepth;
+      document.getElementById('inFlight').textContent = load.inFlight;
+      document.getElementById('errRate').textContent = ((load.errorRate || 0) * 100).toFixed(1) + '%';
+      document.getElementById('p95').textContent = load.p95LatencyMs + ' ms';
+    }
+
+    const tl = await jget('monitor/timeline?limit=30');
+    const samples = (tl.data || tl || []).map(s => s.loadScore).reverse();
+    drawChart(samples);
+
+    document.getElementById('updated').textContent = new Date().toLocaleTimeString();
+  } catch (e) {
+    console.error('refresh failed', e);
+  }
+}
+refresh();
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>

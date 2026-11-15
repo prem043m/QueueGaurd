@@ -1,0 +1,35 @@
+server:
+  port: ${SERVER_PORT:8083}
+
+spring:
+  application:
+    name: worker-service
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:worker_db}
+    username: ${DB_USER:queueguard}
+    password: ${DB_PASSWORD:queueguard}
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+
+queueguard:
+  queue-url: ${QUEUE_SERVICE_URL:http://localhost:8082}
+  monitor-url: ${MONITOR_SERVICE_URL:http://localhost:8085}
+  worker-id: ${WORKER_ID:worker-1}
+  queues: ${WORKER_QUEUES:default}
+  max-concurrency: ${WORKER_MAX_CONCURRENCY:8}
+  batch-size: ${WORKER_BATCH_SIZE:4}
+  poll-interval-ms: ${WORKER_POLL_INTERVAL_MS:500}
+  default-work-ms: ${WORKER_DEFAULT_WORK_MS:100}
+  report-interval-ms: ${WORKER_REPORT_INTERVAL_MS:10000}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+
+logging:
+  level:
+    com.queueguard: INFO

@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rate-limit-service
+  namespace: queueguard
+  labels: { app: rate-limit-service }
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: rate-limit-service }
+  template:
+    metadata:
+      labels: { app: rate-limit-service }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+      containers:
+        - name: rate-limit-service
+          image: queueguard/rate-limit-service:1.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - { containerPort: 8084, name: http }
+          envFrom:
+            - configMapRef: { name: queueguard-config }
+            - secretRef: { name: queueguard-secret }
+          env:
+            - { name: SERVER_PORT, value: "8084" }
+            - { name: DB_NAME, value: ratelimit_db }
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 15
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 45
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 250m, memory: 512Mi }
+            limits: { cpu: "1", memory: 1Gi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rate-limit-service
+  namespace: queueguard
+spec:
+  selector: { app: rate-limit-service }
+  ports:
+    - { name: http, port: 8084, targetPort: 8084 }

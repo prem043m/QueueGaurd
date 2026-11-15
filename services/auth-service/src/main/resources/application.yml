@@ -1,0 +1,33 @@
+server:
+  port: ${SERVER_PORT:8081}
+
+spring:
+  application:
+    name: auth-service
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:auth_db}
+    username: ${DB_USER:queueguard}
+    password: ${DB_PASSWORD:queueguard}
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+    properties:
+      hibernate:
+        jdbc:
+          batch_size: 20
+
+queueguard:
+  jwt:
+    secret: ${JWT_SECRET:queueguard-dev-secret-change-me-in-prod-01}
+    ttl-seconds: ${JWT_TTL_SECONDS:86400}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+
+logging:
+  level:
+    com.queueguard: INFO

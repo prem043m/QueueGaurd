@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: monitor-service
+  namespace: queueguard
+  labels: { app: monitor-service }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: monitor-service }
+  template:
+    metadata:
+      labels: { app: monitor-service }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+      containers:
+        - name: monitor-service
+          image: queueguard/monitor-service:1.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - { containerPort: 8085, name: http }
+          envFrom:
+            - configMapRef: { name: queueguard-config }
+            - secretRef: { name: queueguard-secret }
+          env:
+            - { name: SERVER_PORT, value: "8085" }
+            - { name: DB_NAME, value: monitor_db }
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 15
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 45
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 250m, memory: 512Mi }
+            limits: { cpu: "1", memory: 1Gi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: monitor-service
+  namespace: queueguard
+spec:
+  selector: { app: monitor-service }
+  ports:
+    - { name: http, port: 8085, targetPort: 8085 }

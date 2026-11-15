@@ -1,0 +1,183 @@
+# QueueGuard - full local stack (6 microservices + PostgreSQL + Redis).
+# Run from the repo root:  docker compose up --build
+name: queueguard
+
+x-common-env: &common-env
+  DB_HOST: postgres
+  DB_PORT: "5432"
+  DB_USER: queueguard
+  DB_PASSWORD: queueguard
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  JWT_SECRET: queueguard-dev-secret-change-me-in-prod-01
+  AUTH_SERVICE_URL: http://auth-service:8081
+  QUEUE_SERVICE_URL: http://queue-service:8082
+  WORKER_SERVICE_URL: http://worker-service:8083
+  RATE_LIMIT_SERVICE_URL: http://rate-limit-service:8084
+  MONITOR_SERVICE_URL: http://monitor-service:8085
+  QMS_SERVICE_URL: http://queue-management-service:8086
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: queueguard
+      POSTGRES_PASSWORD: queueguard
+      POSTGRES_DB: postgres
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./deploy/db-init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U queueguard"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+      args: { SERVICE_NAME: api-gateway }
+    image: queueguard/api-gateway:1.0.0
+    environment:
+      <<: *common-env
+      DB_NAME: gateway_db
+      TRUST_PROXY_HEADERS: "false"
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health | grep -q UP || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  auth-service:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+      args: { SERVICE_NAME: auth-service }
+    image: queueguard/auth-service:1.0.0
+    environment:
+      <<: *common-env
+      DB_NAME: auth_db
+    depends_on:
+      postgres: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8081/health | grep -q UP || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  queue-service:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+      args: { SERVICE_NAME: queue-service }
+    image: queueguard/queue-service:1.0.0
+    environment:
+      <<: *common-env
+      DB_NAME: queue_db
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8082/health | grep -q UP || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  worker-service:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+      args: { SERVICE_NAME: worker-service }
+    image: queueguard/worker-service:1.0.0
+    environment:
+      <<: *common-env
+      DB_NAME: worker_db
+      WORKER_ID: worker-1
+      WORKER_QUEUES: default
+      WORKER_MAX_CONCURRENCY: "8"
+    depends_on:
+      queue-service: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8083/health | grep -q UP || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  rate-limit-service:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+      args: { SERVICE_NAME: rate-limit-service }
+    image: queueguard/rate-limit-service:1.0.0
+    environment:
+      <<: *common-env
+      DB_NAME: ratelimit_db
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8084/health | grep -q UP || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  monitor-service:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+      args: { SERVICE_NAME: monitor-service }
+    image: queueguard/monitor-service:1.0.0
+    environment:
+      <<: *common-env
+      DB_NAME: monitor_db
+      MONITOR_TARGETS: api-gateway=http://api-gateway:8080,auth-service=http://auth-service:8081,queue-service=http://queue-service:8082,worker-service=http://worker-service:8083,rate-limit-service=http://rate-limit-service:8084,queue-management-service=http://queue-management-service:8086
+    depends_on:
+      postgres: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8085/health | grep -q UP || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  queue-management-service:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+      args: { SERVICE_NAME: queue-management-service }
+    image: queueguard/queue-management-service:1.0.0
+    environment:
+      <<: *common-env
+      DB_NAME: qms_db
+      SERVER_PORT: "8086"
+    depends_on:
+      postgres: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8086/health | grep -q UP || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  pgdata:
+  redisdata:

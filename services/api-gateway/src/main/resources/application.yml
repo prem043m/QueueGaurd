@@ -1,0 +1,40 @@
+server:
+  port: ${SERVER_PORT:8080}
+
+spring:
+  application:
+    name: api-gateway
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:gateway_db}
+    username: ${DB_USER:queueguard}
+    password: ${DB_PASSWORD:queueguard}
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+
+queueguard:
+  trust-proxy-headers: ${TRUST_PROXY_HEADERS:false}
+  jwt:
+    secret: ${JWT_SECRET:queueguard-dev-secret-change-me-in-prod-01}
+    ttl-seconds: ${JWT_TTL_SECONDS:86400}
+  svc:
+    auth: ${AUTH_SERVICE_URL:http://localhost:8081}
+    queue: ${QUEUE_SERVICE_URL:http://localhost:8082}
+    worker: ${WORKER_SERVICE_URL:http://localhost:8083}
+    ratelimit: ${RATE_LIMIT_SERVICE_URL:http://localhost:8084}
+    monitor: ${MONITOR_SERVICE_URL:http://localhost:8085}
+    qms: ${QMS_SERVICE_URL:http://localhost:8086}
+  fallback-limit-per-sec: ${FALLBACK_LIMIT_PER_SEC:5}
+  fallback-burst: ${FALLBACK_BURST:10}
+  audit-flush-ms: ${AUDIT_FLUSH_MS:2000}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+
+logging:
+  level:
+    com.queueguard: INFO

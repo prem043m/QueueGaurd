@@ -1,0 +1,42 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: queueguard-config
+  namespace: queueguard
+data:
+  # ---- infrastructure ----
+  DB_HOST: "postgres"
+  DB_PORT: "5432"
+  DB_USER: "queueguard"
+  REDIS_HOST: "redis"
+  REDIS_PORT: "6379"
+
+  # ---- service discovery ----
+  AUTH_SERVICE_URL: "http://auth-service:8081"
+  QUEUE_SERVICE_URL: "http://queue-service:8082"
+  WORKER_SERVICE_URL: "http://worker-service:8083"
+  RATE_LIMIT_SERVICE_URL: "http://rate-limit-service:8084"
+  MONITOR_SERVICE_URL: "http://monitor-service:8085"
+  QMS_SERVICE_URL: "http://queue-management-service:8086"
+
+  # ---- security / rate limiting ----
+  # Base allowance per client IP, per second. The *effective* limit is
+  # multiplied live by the adaptive multiplier (0.2x .. 1.5x).
+  RL_BASE_LIMIT_PER_SEC: "10"
+  RL_BURST: "20"
+  RL_USER_LIMIT_PER_SEC: "30"
+  RL_USER_BURST: "60"
+  RL_STRIKE_BAN_THRESHOLD: "5"
+  RL_BAN_BASE_MINUTES: "1"
+  RL_BAN_MAX_MINUTES: "60"
+  # Only enable behind a trusted L7 proxy that overwrites X-Forwarded-For.
+  TRUST_PROXY_HEADERS: "false"
+
+  # ---- worker tuning ----
+  WORKER_QUEUES: "default"
+  WORKER_MAX_CONCURRENCY: "8"
+  WORKER_BATCH_SIZE: "4"
+  WORKER_DEFAULT_WORK_MS: "100"
+
+  # ---- monitor probe targets (name=url) ----
+  MONITOR_TARGETS: "api-gateway=http://api-gateway:8080,auth-service=http://auth-service:8081,queue-service=http://queue-service:8082,worker-service=http://worker-service:8083,rate-limit-service=http://rate-limit-service:8084,queue-management-service=http://queue-management-service:8086"

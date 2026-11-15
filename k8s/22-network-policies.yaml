@@ -1,0 +1,142 @@
+# NetworkPolicies: zero-trust east-west traffic.
+# 1) Deny all ingress by default
+# 2) Only open the exact flows the architecture needs
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: queueguard
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+# The gateway is the only entry point from outside the cluster.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-gateway-external
+  namespace: queueguard
+spec:
+  podSelector:
+    matchLabels: { app: api-gateway }
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - { protocol: TCP, port: 8080 }
+---
+# Microservices only accept traffic from the gateway and the monitor's probes.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-qms-from-gateway
+  namespace: queueguard
+spec:
+  podSelector: { matchLabels: { app: queue-management-service } }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app: api-gateway } }
+        - podSelector: { matchLabels: { app: monitor-service } }
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-services-from-gateway-and-monitor
+  namespace: queueguard
+spec:
+  podSelector:
+    matchLabels:
+      app: auth-service
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app: api-gateway } }
+        - podSelector: { matchLabels: { app: monitor-service } }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-queue-from-gateway-worker-monitor
+  namespace: queueguard
+spec:
+  podSelector:
+    matchLabels: { app: queue-service }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app: api-gateway } }
+        - podSelector: { matchLabels: { app: worker-service } }
+        - podSelector: { matchLabels: { app: monitor-service } }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-worker-from-gateway-monitor
+  namespace: queueguard
+spec:
+  podSelector:
+    matchLabels: { app: worker-service }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app: api-gateway } }
+        - podSelector: { matchLabels: { app: monitor-service } }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ratelimit-from-gateway-monitor
+  namespace: queueguard
+spec:
+  podSelector:
+    matchLabels: { app: rate-limit-service }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app: api-gateway } }
+        - podSelector: { matchLabels: { app: monitor-service } }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-monitor-from-gateway
+  namespace: queueguard
+spec:
+  podSelector:
+    matchLabels: { app: monitor-service }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app: api-gateway } }
+---
+# Databases: reachable only from inside the namespace (service pods).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-postgres-internal
+  namespace: queueguard
+spec:
+  podSelector:
+    matchLabels: { app: postgres }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: {}
+      ports:
+        - { protocol: TCP, port: 5432 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-redis-internal
+  namespace: queueguard
+spec:
+  podSelector:
+    matchLabels: { app: redis }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app: queue-service } }
+        - podSelector: { matchLabels: { app: rate-limit-service } }
+      ports:
+        - { protocol: TCP, port: 6379 }
