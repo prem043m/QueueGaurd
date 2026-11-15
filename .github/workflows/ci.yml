@@ -21,4 +21,4 @@ jobs:
           cache: maven
       - name: Verify Maven reactor
         run: mvn --batch-mode --no-transfer-progress clean verify
-        working-directory: queueguard
+        working-directory: .

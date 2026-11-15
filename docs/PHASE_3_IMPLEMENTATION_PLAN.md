@@ -2,13 +2,12 @@
 ## Implementation Plan
 
 **Version:** 2.6  
-**Date:** 2026-11-10  
-**Status:** Final design review; implementation not approved
+**Date:** 2026-11-15
+**Status:** Milestones 3.1-3.4 implemented and verified; Milestones 3.5-3.7 outstanding
 
 Version 2.6 incorporates the final architecture corrections for Milestones 3.1
-and 3.2.
-This document is a design plan only. It does not create Java classes, change
-source code, or create a Flyway migration.
+and 3.2. The implementation status below records subsequently verified work;
+the architecture remains a plan for Milestones 3.5-3.7.
 
 ## 1. Scope and principles
 
@@ -605,7 +604,8 @@ Safe retry behavior:
 The Phase 3 proposal contains **62 endpoints**, **9 controllers**, and
 **8 business services plus one queue integration component**.
 
-HTTP totals are **32 POST**, **23 GET**, **5 PATCH**, and **2 DELETE**.
+HTTP totals are **32 POST**, **23 GET**, **2 PATCH**, **3 PUT**, and
+**2 DELETE**.
 The following table is the complete inventory; each endpoint is counted once.
 Controller totals are: PlacementDrive 10, CandidateProfile 5, Application 9,
 InterviewRound 9, InterviewerAssignment 6, CandidateRound 7,
@@ -617,7 +617,7 @@ of method plus path found no duplicate HTTP mappings.
 | 1 | POST | `/drives` | PlacementDriveController | ORG_ADMIN, QUEUE_MANAGER | Create drive |
 | 2 | GET | `/drives` | PlacementDriveController | MEMBER, ORG_ADMIN, QUEUE_MANAGER | List drives |
 | 3 | GET | `/drives/{id}` | PlacementDriveController | MEMBER, ORG_ADMIN, QUEUE_MANAGER | Get drive |
-| 4 | PATCH | `/drives/{id}` | PlacementDriveController | ORG_ADMIN, QUEUE_MANAGER | Update drive |
+| 4 | PUT | `/drives/{id}` | PlacementDriveController | ORG_ADMIN, QUEUE_MANAGER | Replace drive details |
 | 5 | POST | `/drives/{id}/publish` | PlacementDriveController | ORG_ADMIN, QUEUE_MANAGER | Publish drive |
 | 6 | POST | `/drives/{id}/open` | PlacementDriveController | ORG_ADMIN, QUEUE_MANAGER | Open registration |
 | 7 | POST | `/drives/{id}/close` | PlacementDriveController | ORG_ADMIN, QUEUE_MANAGER | Close registration |
@@ -626,9 +626,9 @@ of method plus path found no duplicate HTTP mappings.
 | 10 | POST | `/drives/{id}/cancel` | PlacementDriveController | ORG_ADMIN, QUEUE_MANAGER | Cancel drive |
 | 11 | POST | `/candidates/profiles` | CandidateProfileController | MEMBER | Create own profile |
 | 12 | GET | `/candidates/profiles/me` | CandidateProfileController | MEMBER | Get own profile |
-| 13 | GET | `/candidates/profiles/{id}` | CandidateProfileController | ORG_ADMIN, QUEUE_MANAGER | Get profile |
+| 13 | GET | `/candidates/profiles/{id}` | CandidateProfileController | MEMBER (own), ORG_ADMIN, QUEUE_MANAGER | Get profile |
 | 14 | GET | `/candidates/profiles` | CandidateProfileController | ORG_ADMIN, QUEUE_MANAGER | List profiles |
-| 15 | PATCH | `/candidates/profiles/{id}` | CandidateProfileController | MEMBER (own), ORG_ADMIN, QUEUE_MANAGER | Update profile |
+| 15 | PUT | `/candidates/profiles/{id}` | CandidateProfileController | MEMBER (own), ORG_ADMIN, QUEUE_MANAGER | Replace profile |
 | 16 | POST | `/drives/{driveId}/apply` | ApplicationController | MEMBER | Submit application |
 | 17 | GET | `/applications/me` | ApplicationController | MEMBER | List own applications |
 | 18 | GET | `/drives/{driveId}/applications` | ApplicationController | ORG_ADMIN, QUEUE_MANAGER | List drive applications |
@@ -641,7 +641,7 @@ of method plus path found no duplicate HTTP mappings.
 | 25 | POST | `/drives/{driveId}/rounds` | InterviewRoundController | ORG_ADMIN, QUEUE_MANAGER | Create round and queue |
 | 26 | GET | `/drives/{driveId}/rounds` | InterviewRoundController | MEMBER, ORG_ADMIN, QUEUE_MANAGER | List rounds |
 | 27 | GET | `/rounds/{id}` | InterviewRoundController | ORG_ADMIN, QUEUE_MANAGER, assigned INTERVIEWER | Get round |
-| 28 | PATCH | `/rounds/{id}` | InterviewRoundController | ORG_ADMIN, QUEUE_MANAGER | Update round |
+| 28 | PUT | `/rounds/{id}` | InterviewRoundController | ORG_ADMIN, QUEUE_MANAGER | Replace round details |
 | 29 | DELETE | `/rounds/{id}` | InterviewRoundController | ORG_ADMIN, QUEUE_MANAGER | Delete DRAFT round |
 | 30 | POST | `/rounds/{id}/open` | InterviewRoundController | ORG_ADMIN, QUEUE_MANAGER | Open round |
 | 31 | POST | `/rounds/{id}/pause` | InterviewRoundController | ORG_ADMIN, QUEUE_MANAGER | Pause round |
@@ -908,15 +908,43 @@ APIs and authorization; 3.5 covers QueueService integration and registration;
 3.6 covers immutable evaluations and outbox/domain-event integration; 3.7
 covers analytics, operational hardening, and end-to-end verification.
 
-No migration file or implementation artifact is created as part of this
-documentation revision.
+The approved Milestone 3.4 boundary is REST controllers, validated request
+DTOs, response views, and JWT actor binding for operations already supported
+by the PlacementDrive, CandidateProfile, CandidateApplication, InterviewRound,
+and InterviewerAssignment services. These routes use
+`/api/v1/organizations/{orgId}` and comprise 36 mappings across five
+controllers (17 POST, 13 GET, 3 PATCH, and 3 PUT). Detail/profile replacement
+uses PUT; single-field capacity and state transitions use PATCH. The boundary excludes
+CandidateRound workflows, QueueService integration, evaluations, statistics,
+and unsupported operations such as round deletion/resume and assignment
+deletion. Those capabilities remain in their later milestones or require
+separate approval.
+
+### Verified milestone status
+
+| Milestone | Status | Evidence |
+|---|---|---|
+| 3.1 Database foundation | Implemented | V3 migration and Phase 3 entities/enums exist; full PostgreSQL verification passed. |
+| 3.2 Persistence verification | Verified | PostgreSQL 15.20 Testcontainers persistence suite passed; Flyway applied V1-V5. |
+| 3.3 Business services | Implemented and tested | Phase 3 business services and service tests exist; tests passed in clean verify. |
+| 3.4 REST APIs and authorization | Implemented and verified | Five Phase 3 controllers, DTOs, exception responses, and PostgreSQL-backed MockMvc/JWT tests passed. |
+| 3.5 Queue integration and registration | Outstanding; not started | No CandidateRound registration/queue workflow added. |
+| 3.6 Evaluations and outbox integration | Outstanding; not started | No evaluation submission or Phase 3 outbox workflow added. |
+| 3.7 Analytics and end-to-end hardening | Outstanding; not started | Statistics and end-to-end features remain outside this task. |
+
+Milestone 3.4 verification used the real JWT filter, TenantService, Phase 3
+business services, and PostgreSQL 15.20 through Spring Boot MockMvc tests. Its
+11 MVC tests passed with no skips. Its 36 routes are 17 POST, 13 GET, 3 PATCH,
+and 3 PUT. The broader design inventory
+remains 62 endpoints across 9 controllers, with totals 32 POST, 23 GET,
+2 PATCH, 3 PUT, and 2 DELETE after correcting the three full-replacement
+routes to PUT.
 
 ## 15. Remaining risks
 
-- The exact Phase 3 package and controller base paths must be aligned with the
-  service's final API convention before implementation.
-- Capacity locking and capacity-reduction checks must be validated against the
-  `placement_drives` row-lock strategy under real PostgreSQL concurrency.
+- Later milestone routes still require their approved integration design.
+- Continue PostgreSQL concurrency and operational hardening as part of
+  Milestone 3.7.
 - The outbox publisher must preserve event ordering for a candidate and round.
 - A trusted internal mechanism for automated registration is still unresolved;
   coordinator-triggered registration is the only approved Phase 3 model.
@@ -945,7 +973,7 @@ documentation revision.
   capacity changes, and rejection of reductions below existing reservations.
 - Removed evaluation revision and `EVALUATION_UPDATED` from Phase 3.
 - Reconciled the complete API inventory to 62 endpoints across 9 controllers:
-  32 POST, 23 GET, 5 PATCH, and 2 DELETE. ApplicationController retains the
+  32 POST, 23 GET, 2 PATCH, 3 PUT, and 2 DELETE. ApplicationController retains the
   application-round listing; CandidateRoundController has 7 endpoints.
 - Replaced ambiguous `candidateId` parameters with `applicationId` or
   `candidateRoundId`.
@@ -976,6 +1004,18 @@ documentation revision.
   one-to-one, while unrelated QMS QueueEntries may exist.
 - Verified and documented organization-scoped membership foreign keys for
   profiles, interviewer assignments, and evaluations.
+- Implemented the five Milestone 3.4 controllers and scoped request/response
+  DTOs under the QMS tenant API path.
+- Changed full drive, candidate-profile, and interview-round replacements to
+  PUT; retained PATCH for capacity and explicit eligibility/assignment
+  transitions.
+- Added request-level date/schedule ordering validation, DTO size limits, and
+  consistent sanitized ApiResponse handling for validation and unexpected
+  request errors.
+- Enforced documented role boundaries at Phase 3 API routes through the
+  existing Phase3Access/TenantService membership checks.
+- Added PostgreSQL-backed MockMvc tests for all five controllers, including
+  JWT authentication, validation, ownership, tenant isolation, and role access.
 
 ### Decision status
 
@@ -993,7 +1033,7 @@ documentation revision.
 | Evaluation ownership | Ready: InterviewEvaluation owns submitted details |
 | PlacementDrive capacity | Ready: positive registrationCapacity and locked updates |
 | Evaluation revisions | Ready: no Phase 3 update |
-| Endpoint/event counts | Reconciled: 62 endpoints; 32 POST, 23 GET, 5 PATCH, 2 DELETE; 33 distinct outbox events |
+| Endpoint/event counts | Reconciled: 62 endpoints; 32 POST, 23 GET, 2 PATCH, 3 PUT, 2 DELETE; 33 distinct outbox events |
 | Milestone 3.1 scope | Ready: migration, entities, enums, relationships, constraints only |
 | Endpoint uniqueness | Ready: 62 unique method/path combinations |
 
