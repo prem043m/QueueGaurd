@@ -265,6 +265,8 @@ class Phase3BusinessServiceTest {
         queue.setOrderingPolicy(OrderingPolicy.FIFO);
         queue.setStatus(QueueStatus.DRAFT);
         when(rounds.findByIdAndOrganizationId(30L, 3L)).thenReturn(Optional.of(round));
+        when(rounds.findByIdAndOrganizationIdForUpdate(30L, 3L))
+                .thenReturn(Optional.of(round));
         when(rounds.existsByOrganizationIdAndPlacementDriveIdAndRoundNumberAndIdNot(
                 3L, 11L, 1, 30L)).thenReturn(false);
         when(queues.findByOrganizationAndId(3L, 12L)).thenReturn(Optional.of(queue));

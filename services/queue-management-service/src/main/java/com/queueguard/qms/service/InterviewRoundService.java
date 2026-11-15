@@ -137,15 +137,18 @@ public class InterviewRoundService {
     @Transactional
     public InterviewRound open(Long actorId, Long organizationId, Long roundId) {
         access.requireDriveManager(actorId, organizationId);
-        InterviewRound round = requireRound(roundId, organizationId);
+        InterviewRound roundReference = requireRound(roundId, organizationId);
+        PlacementDrive drive = driveRepository.findByIdAndOrganizationIdForUpdate(
+                roundReference.getPlacementDriveId(), organizationId)
+                .orElseThrow(() -> new NotFoundException("Placement drive not found"));
+        InterviewRound round = roundRepository
+                .findByIdAndOrganizationIdForUpdate(roundId, organizationId)
+                .orElseThrow(() -> new NotFoundException("Interview round not found"));
         if (round.getStatus() != InterviewRoundStatus.DRAFT
                 && round.getStatus() != InterviewRoundStatus.PAUSED) {
             throw conflict("INVALID_ROUND_TRANSITION", "Only draft or paused rounds can be opened");
         }
         validateReadiness(round, organizationId);
-        PlacementDrive drive = driveRepository.findByIdAndOrganizationIdForUpdate(
-                round.getPlacementDriveId(), organizationId)
-                .orElseThrow(() -> new NotFoundException("Placement drive not found"));
         if (drive.getStatus() != PlacementDriveStatus.PUBLISHED
                 && drive.getStatus() != PlacementDriveStatus.REGISTRATION_OPEN
                 && drive.getStatus() != PlacementDriveStatus.REGISTRATION_CLOSED

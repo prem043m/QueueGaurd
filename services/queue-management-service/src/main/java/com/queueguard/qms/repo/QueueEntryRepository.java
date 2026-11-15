@@ -33,6 +33,8 @@ public interface QueueEntryRepository extends JpaRepository<QueueEntry, Long> {
     
     // Find by token number and organization
     Optional<QueueEntry> findByTokenNumberAndOrganizationId(String tokenNumber, Long organizationId);
+
+    Optional<QueueEntry> findByIdAndOrganizationId(Long id, Long organizationId);
     
     // Find by participant user and organization
     List<QueueEntry> findByParticipantUserIdAndOrganizationIdOrderByJoinedAtDesc(
