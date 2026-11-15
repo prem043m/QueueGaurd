@@ -1,12 +1,13 @@
 # QueueGuard Phase 3 - Student Interview Management System
 ## Implementation Plan
 
-**Version:** 2.7
+**Version:** 2.9
 **Date:** 2026-11-15
-**Status:** Milestones 3.1-3.5 implemented and verified; Milestones 3.6-3.7 outstanding
+**Status:** Milestones 3.1-3.7 implemented and verified; downstream consumers and analytics remain future work
 
-Version 2.7 incorporates the verified CandidateRound lifecycle and Business
-Queue Engine integration for Milestone 3.5. Milestones 3.6-3.7 remain planned.
+Version 2.9 adds the QMS Redis Streams outbox publisher, PostgreSQL claim
+leases, bounded retries, and at-least-once delivery to Version 2.8's immutable
+evaluation and transactional outbox writer.
 
 ## 1. Scope and principles
 
@@ -595,15 +596,15 @@ Safe retry behavior:
 
 ## 8. REST API inventory
 
-The Phase 3 inventory contains **63 endpoints**, **9 controllers**, and
-**8 business services plus one queue integration component**.
+The Phase 3 inventory contains **62 endpoints**, **9 controllers**, and
+**9 business services plus one queue integration component**.
 
-HTTP totals are **33 POST**, **23 GET**, **2 PATCH**, **3 PUT**, and
+HTTP totals are **33 POST**, **22 GET**, **2 PATCH**, **3 PUT**, and
 **2 DELETE**.
 The following table is the complete inventory; each endpoint is counted once.
 Controller totals are: PlacementDrive 10, CandidateProfile 5, Application 8,
 InterviewRound 9, InterviewerAssignment 6, CandidateRound 9,
-InterviewEvaluation 4, InterviewQueue 8, and Statistics 4. A normalized audit
+InterviewEvaluation 3, InterviewQueue 8, and Statistics 4. A normalized audit
 of method plus path found no duplicate HTTP mappings.
 
 | # | Method | Full path | Controller | Required role | Short purpose |
@@ -654,23 +655,22 @@ of method plus path found no duplicate HTTP mappings.
 | 44 | POST | `/applications/{applicationId}/rounds/{roundId}/select` | CandidateRoundController | ORG_ADMIN, QUEUE_MANAGER | Select application |
 | 45 | POST | `/applications/{applicationId}/rounds/{roundId}/hold` | CandidateRoundController | ORG_ADMIN, QUEUE_MANAGER, assigned INTERVIEWER | Hold application decision |
 | 46 | GET | `/rounds/{roundId}/applications/{applicationId}` | CandidateRoundController | MEMBER (own), ORG_ADMIN, QUEUE_MANAGER, assigned INTERVIEWER | Get round and QueueEntry status |
-| 47 | POST | `/rounds/{roundId}/candidate-rounds/{candidateRoundId}/evaluate` | InterviewEvaluationController | assigned INTERVIEWER | Submit final evaluation |
-| 48 | GET | `/evaluations/me` | InterviewEvaluationController | INTERVIEWER | List own evaluations |
-| 49 | GET | `/evaluations/{id}` | InterviewEvaluationController | ORG_ADMIN, QUEUE_MANAGER, own INTERVIEWER | Get evaluation |
-| 50 | GET | `/rounds/{roundId}/evaluations` | InterviewEvaluationController | ORG_ADMIN, QUEUE_MANAGER | List evaluations |
-| 51 | POST | `/rounds/{roundId}/call-next` | InterviewQueueController | assigned INTERVIEWER | Call next queue entry |
-| 52 | POST | `/rounds/{roundId}/start` | InterviewQueueController | ORG_ADMIN, QUEUE_MANAGER | Start round queue |
-| 53 | POST | `/rounds/{roundId}/stop` | InterviewQueueController | ORG_ADMIN, QUEUE_MANAGER | Stop round queue |
-| 54 | POST | `/rounds/{roundId}/candidate-rounds/{candidateRoundId}/start` | InterviewQueueController | assigned INTERVIEWER | Start interview |
-| 55 | POST | `/rounds/{roundId}/candidate-rounds/{candidateRoundId}/complete` | InterviewQueueController | assigned INTERVIEWER | Complete interview |
-| 56 | POST | `/rounds/{roundId}/candidate-rounds/{candidateRoundId}/no-show` | InterviewQueueController | assigned INTERVIEWER | Mark no-show |
-| 57 | POST | `/rounds/{roundId}/candidate-rounds/{candidateRoundId}/requeue` | InterviewQueueController | ORG_ADMIN, QUEUE_MANAGER, assigned INTERVIEWER | Requeue entry |
-| 58 | POST | `/rounds/{roundId}/candidate-rounds/{candidateRoundId}/skip` | InterviewQueueController | ORG_ADMIN, QUEUE_MANAGER, assigned INTERVIEWER | Skip entry |
-| 59 | GET | `/drives/{driveId}/statistics` | StatisticsController | ORG_ADMIN, QUEUE_MANAGER | Drive statistics |
-| 60 | GET | `/rounds/{roundId}/statistics` | StatisticsController | ORG_ADMIN, QUEUE_MANAGER | Round statistics |
-| 61 | GET | `/drives/{driveId}/rounds/{roundId}/candidates` | StatisticsController | ORG_ADMIN, QUEUE_MANAGER | Candidate list |
-| 62 | GET | `/drives/{driveId}/statistics/summary` | StatisticsController | ORG_ADMIN, QUEUE_MANAGER | Summary |
-| 63 | POST | `/applications/{applicationId}/rounds/{roundId}/progress` | CandidateRoundController | ORG_ADMIN, QUEUE_MANAGER | Register a qualified candidate in the next existing round |
+| 47 | POST | `/candidate-rounds/{candidateRoundId}/evaluations` | InterviewEvaluationController | assigned INTERVIEWER | Submit immutable evaluation |
+| 48 | GET | `/candidate-rounds/{candidateRoundId}/evaluations` | InterviewEvaluationController | ORG_ADMIN, QUEUE_MANAGER, assigned INTERVIEWER | List round evaluations |
+| 49 | GET | `/evaluations/me` | InterviewEvaluationController | INTERVIEWER | List own evaluations |
+| 50 | POST | `/rounds/{roundId}/call-next` | InterviewQueueController | assigned INTERVIEWER | Call next queue entry |
+| 51 | POST | `/rounds/{roundId}/start` | InterviewQueueController | ORG_ADMIN, QUEUE_MANAGER | Start round queue |
+| 52 | POST | `/rounds/{roundId}/stop` | InterviewQueueController | ORG_ADMIN, QUEUE_MANAGER | Stop round queue |
+| 53 | POST | `/rounds/{roundId}/candidate-rounds/{candidateRoundId}/start` | InterviewQueueController | assigned INTERVIEWER | Start interview |
+| 54 | POST | `/rounds/{roundId}/candidate-rounds/{candidateRoundId}/complete` | InterviewQueueController | assigned INTERVIEWER | Complete interview |
+| 55 | POST | `/rounds/{roundId}/candidate-rounds/{candidateRoundId}/no-show` | InterviewQueueController | assigned INTERVIEWER | Mark no-show |
+| 56 | POST | `/rounds/{roundId}/candidate-rounds/{candidateRoundId}/requeue` | InterviewQueueController | ORG_ADMIN, QUEUE_MANAGER, assigned INTERVIEWER | Requeue entry |
+| 57 | POST | `/rounds/{roundId}/candidate-rounds/{candidateRoundId}/skip` | InterviewQueueController | ORG_ADMIN, QUEUE_MANAGER, assigned INTERVIEWER | Skip entry |
+| 58 | GET | `/drives/{driveId}/statistics` | StatisticsController | ORG_ADMIN, QUEUE_MANAGER | Drive statistics |
+| 59 | GET | `/rounds/{roundId}/statistics` | StatisticsController | ORG_ADMIN, QUEUE_MANAGER | Round statistics |
+| 60 | GET | `/drives/{driveId}/rounds/{roundId}/candidates` | StatisticsController | ORG_ADMIN, QUEUE_MANAGER | Candidate list |
+| 61 | GET | `/drives/{driveId}/statistics/summary` | StatisticsController | ORG_ADMIN, QUEUE_MANAGER | Summary |
+| 62 | POST | `/applications/{applicationId}/rounds/{roundId}/progress` | CandidateRoundController | ORG_ADMIN, QUEUE_MANAGER | Register a qualified candidate in the next existing round |
 
 ### API response rule
 
@@ -750,6 +750,13 @@ Across the combined outbox design there are **33 distinct event names**: 9
 existing QMS outbox events plus 24 new Phase 3 events. The 17-name audit enum
 is a separate count and is not added to the outbox count. `EVALUATION_UPDATED`
 is absent.
+`EVALUATION_SUBMITTED` is now persisted with aggregate type
+`InterviewEvaluation`, aggregate ID equal to the evaluation ID, and a
+deterministic idempotency key derived from organization and evaluation IDs.
+The evaluation and `PENDING` outbox row commit in the same QMS transaction.
+The Phase 3.7 publisher transfers committed rows to Redis Streams with
+at-least-once semantics. Consumers must deduplicate repeated deliveries;
+downstream business consumers are deferred to Phase 3.8.
 
 ## 10. Lifecycle and workflows
 
@@ -818,9 +825,11 @@ application, and round checks; it does not create another QueueEntry.
 
 ### Evaluation
 
-An assigned interviewer submits one evaluation. Submission is immutable in
-Phase 3 and may drive a decision transition, but it does not change
-`QueueEntry.status` directly.
+An actively assigned interviewer submits one immutable evaluation for a
+CandidateRound. Evaluation recommendations and scores are assessment data only:
+they do not aggregate into or change `CandidateRound.result`, and they do not
+change `QueueEntry.status`. The existing authorized decision endpoints remain
+the only way to record a round outcome.
 
 ## 11. Authorization and tenant isolation
 
@@ -882,8 +891,9 @@ tests. Milestone 3.2 database integration tests cover:
 
 Milestone 3.5 verifies registration authorization, live QueueEntry status
 responses, coordinator registration, queue integration, outcome recording,
-and progression. Milestones 3.6-3.7 retain evaluation/outbox-domain-event
-integration, analytics, operational hardening, and end-to-end verification.
+and progression. Milestone 3.6 adds immutable evaluations and event creation;
+Milestone 3.7 publishes committed outbox rows to Redis Streams. Analytics and
+downstream business consumers are later work.
 
 ## 14. Milestone boundaries
 
@@ -916,8 +926,9 @@ transaction-manager/rollback verification.
 Milestone 3.3 covers business services and state transitions; 3.4 covers REST
 APIs and authorization; 3.5 covers CandidateRound lifecycle and QueueService
 integration and is implemented below. Milestone 3.6 covers immutable
-evaluations and outbox/domain-event integration; 3.7 covers analytics,
-operational hardening, and end-to-end verification.
+evaluations and transactional outbox-event creation; 3.7 covers the QMS
+Redis Streams publisher and reliable event delivery. Analytics and consuming
+business effects are deferred; consumers are expected in Phase 3.8.
 
 The approved Milestone 3.4 boundary is REST controllers, validated request
 DTOs, response views, and JWT actor binding for operations already supported
@@ -940,17 +951,17 @@ separate approval.
 | 3.3 Business services | Implemented and tested | Phase 3 business services and service tests exist; tests passed in clean verify. |
 | 3.4 REST APIs and authorization | Implemented and verified | Five Phase 3 controllers, DTOs, exception responses, and PostgreSQL-backed MockMvc/JWT tests passed. |
 | 3.5 CandidateRound lifecycle and queue integration | Implemented and verified | PostgreSQL-backed registration, rollback, concurrency, authorization, outcomes, progression, and live QueueEntry status tests passed. |
-| 3.6 Evaluations and outbox integration | Outstanding; not started | No evaluation submission or Phase 3 outbox workflow added. |
-| 3.7 Analytics and end-to-end hardening | Outstanding; not started | Statistics and end-to-end features remain outside this task. |
+| 3.6 Immutable evaluations and event creation | Implemented and verified | Evaluation writes and `EVALUATION_SUBMITTED` outbox writes commit atomically; evaluation and authorization tests pass. |
+| 3.7 Transactional outbox publisher | Implemented and verified | PostgreSQL leases and Redis Streams publication, retry, crash recovery, concurrency, and stable event identity are covered by integration tests. |
 
 Milestone 3.4 verification used the real JWT filter, TenantService, Phase 3
 business services, and PostgreSQL 15.20 through Spring Boot MockMvc tests. Its
 11 MVC tests passed with no skips. Its 36 routes are 17 POST, 13 GET, 3 PATCH,
 and 3 PUT. The Phase3ControllerTest now contains 13 tests, including
-Milestone 3.5 coverage. The complete design inventory is 63 endpoints across
-9 controllers, with totals 33 POST, 23 GET, 2 PATCH, 3 PUT, and 2 DELETE.
-CandidateRoundController has 9 endpoints; 45 Phase 3 endpoints across six
-controllers are implemented.
+Milestone 3.5 coverage. The complete design inventory is 62 endpoints across
+9 controllers, with totals 33 POST, 22 GET, 2 PATCH, 3 PUT, and 2 DELETE.
+CandidateRoundController has 9 endpoints; InterviewEvaluationController has
+3. There are 48 implemented Phase 3 endpoints across seven controllers.
 
 ### Milestone 3.5 implementation record
 
@@ -1034,10 +1045,12 @@ containers.
 
 ## 15. Remaining risks
 
-- Later milestone routes still require their approved integration design.
-- Continue PostgreSQL concurrency and operational hardening as part of
-  Milestone 3.7.
-- The outbox publisher must preserve event ordering for a candidate and round.
+- Phase 3.8 consumers must deduplicate on stable `eventId` (and may also use
+  `idempotencyKey`) because Redis publication is at-least-once, not exactly-once.
+- `FAILED` events require operational inspection and explicit recovery; this
+  milestone does not add an administrative replay API or monitoring dashboard.
+- Production Redis must retain durable AOF storage and appropriate capacity;
+  the Compose Redis service uses a persistent volume and `appendfsync always`.
 - A trusted internal mechanism for automated registration is still unresolved;
   coordinator-triggered registration is the only approved Phase 3 model.
 - QueueService DTO details may require an adapter, but the verified method
@@ -1050,7 +1063,82 @@ containers.
   records interview outcomes after completion but does not add queue mutation
   endpoints or duplicate queue lifecycle logic.
 
-## 16. Version 2.7 readiness assessment
+## 17. Version 2.8 - Milestone 3.6 implementation record (historical)
+
+### Evaluation lifecycle and authorization
+
+`InterviewEvaluation` remains the immutable assessment record; it is separate
+from `CandidateRound.result`. An actively assigned organization interviewer
+may submit one evaluation per CandidateRound. Submission verifies active tenant
+membership and `INTERVIEWER` role, locks the active interviewer assignment and
+CandidateRound, then persists the evaluation and outbox row. A database unique
+constraint enforces one evaluation per `(organization_id, candidate_round_id,
+interviewer_user_id)` even if callers bypass the service.
+
+Scores are validated in the request, service, and existing PostgreSQL
+constraints to be within 0 through 100. Recommendation and feedback are
+required. The authenticated actor supplies the interviewer identity; clients
+cannot choose it. Evaluation rows cannot be updated or deleted: the entity
+callbacks reject ORM mutation and V6 installs a PostgreSQL trigger to reject
+direct SQL updates/deletes. There is no correction endpoint or score-based
+automatic decision. CandidateRound decisions continue to use their existing
+separate authorized operations.
+
+### Implemented routes
+
+All routes use `/api/v1/organizations/{orgId}` and return DTOs within the
+standard `ApiResponse` envelope:
+
+| Method | Full path | Access |
+|---|---|---|
+| POST | `/api/v1/organizations/{orgId}/candidate-rounds/{candidateRoundId}/evaluations` | Active interviewer assigned to the round |
+| GET | `/api/v1/organizations/{orgId}/candidate-rounds/{candidateRoundId}/evaluations` | ORG_ADMIN, QUEUE_MANAGER, or active assigned interviewer |
+| GET | `/api/v1/organizations/{orgId}/evaluations/me` | Authenticated active organization interviewer |
+
+Candidates and unrelated members cannot retrieve private evaluations.
+Cross-organization lookups are organization-scoped and return not found.
+Submission is immutable; ordinary update and delete routes do not exist.
+
+### Database and outbox
+
+V3 already provided the organization-scoped CandidateRound/interviewer foreign
+keys, unique reviewer constraint, four score-range checks, and CandidateRound
+lookup index. V6 adds an interviewer retrieval index, a partial unique
+idempotency index for `EVALUATION_SUBMITTED`, and an immutability trigger.
+V1-V5 remain unchanged.
+
+The service writes exactly one `EVALUATION_SUBMITTED` outbox row with payload
+fields `organizationId`, `candidateRoundId`, `evaluationId`, and
+`interviewerUserId`. Its deterministic key is
+`evaluation-submitted:{organizationId}:{evaluationId}`. Evaluation and event
+are flushed and committed together; no event is sent directly to Redis or
+published before commit. PostgreSQL tests verify independent-transaction
+visibility, rollback, event-write failure rollback, stable-key uniqueness,
+and concurrent duplicate submissions.
+
+Repository inspection found an outbox entity and repository but no publisher
+or consumer. Therefore the event remains `PENDING` for a future trusted
+publisher. This milestone verifies durable transactional event creation and
+producer idempotency; it does not claim delivery, retry execution, or
+downstream duplicate-delivery effects. No delivery processor was invented.
+
+### Verification
+
+Verified with:
+
+`mvn --batch-mode --no-transfer-progress -pl services/queue-management-service -am clean verify`
+
+Result: **BUILD SUCCESS**. The QMS module ran **118 tests**, and the Common
+module ran **3**: **121 total, 0 failures, 0 errors, 0 skipped**. PostgreSQL
+15.20 Testcontainers actually started for the CandidateRound lifecycle,
+evaluation, persistence, queue-concurrency, and MVC integration suites; V6
+was applied in the evaluation and persistence suites. `git diff --check`
+passed. Delivery/retry and downstream duplicate-delivery effects were not
+tested because this repository has no publisher or consumer; those acceptance
+items remain outstanding, so Phase 3.6 is not claimed complete. Milestone 3.7
+remains outstanding.
+
+## 16. Version 2.7 readiness assessment (historical)
 
 ### Corrections made
 
@@ -1231,3 +1319,61 @@ containers.
 - Verified Milestone 3.5 with the clean QMS reactor build: 99 tests total,
   zero failures, errors, or skips; PostgreSQL 15.20 and Flyway V1-V5 passed.
 - Recorded Milestones 3.6-3.7 as outstanding.
+
+## 18. Version 2.9 - Milestone 3.7 outbox publisher
+
+### Transport and event contract
+
+QMS publishes committed outbox records to the Redis 7 stream configured by
+`queueguard.outbox.stream-key` (default `qg:qms:outbox`). Redis Streams are
+consumer-group compatible; no consumer group or downstream business handler is
+created in this milestone. Every entry includes the stable PostgreSQL outbox
+`eventId`, `eventType`, organization, aggregate type and ID, the stored payload,
+creation time, and `idempotencyKey` when present. Retries reuse the same event
+ID and idempotency key.
+
+`XADD` followed by the PostgreSQL PUBLISHED update provides at-least-once
+publication. If Redis accepts an entry but QMS crashes before the database
+update, the expired lease permits republishing; the stream can then contain
+duplicate entries with the same `eventId`. This is not exactly-once delivery.
+Phase 3.8 consumers must deduplicate before applying business effects.
+
+The Compose Redis service retains AOF data on its named volume and uses
+`appendfsync always`. QMS waits for Redis health in Compose and uses the
+existing `REDIS_HOST`/`REDIS_PORT` environment settings. No Redis Pub/Sub
+transport or second outbox writer was added.
+
+### Claim, retry, and recovery lifecycle
+
+V7 adds `PROCESSING`, `next_attempt_at`, `claimed_at`, `claim_token`, and
+`updated_at`; existing events are backfilled from their creation/publication
+timestamps. V1-V6 are unchanged. The migration also adds partial due-event and
+lease indexes plus a status/claim-state constraint.
+
+Each scheduled poll locks a bounded batch ordered by `(created_at, id)` using
+`FOR UPDATE SKIP LOCKED`, marks the rows PROCESSING with unique claim tokens,
+and commits before making any Redis call. Later pending/processing events for
+the same organization-scoped aggregate wait behind earlier nonterminal events.
+Redis calls and subsequent status updates use separate transactions. A claim
+token prevents a stale publisher from finalizing a lease that another instance
+has reclaimed.
+
+The configured lease recovers rows after process termination. Redis failures
+record an error and set a bounded exponential `next_attempt_at`; attempts are
+bounded by `max-attempts`, after which the row becomes FAILED. A failure to
+update PostgreSQL leaves the claim for lease recovery. Failed rows remain
+visible for operations; an administrative replay API is not included.
+
+### Verification
+
+Verified with:
+
+`mvn --batch-mode --no-transfer-progress -pl services/queue-management-service -am clean verify`
+
+Result: **BUILD SUCCESS**. The QMS module ran **131 tests** and Common ran
+**3**: **134 total, 0 failures, 0 errors, 0 skipped**. PostgreSQL 15.20
+Testcontainers ran for the QMS integration suites; the seven-test publisher
+suite also started Redis 7 Testcontainers and verified stream contents,
+concurrent claims, retries, lease recovery, per-aggregate ordering, and
+duplicate publication identity. `docker compose config -q` and
+`git diff --check` passed.

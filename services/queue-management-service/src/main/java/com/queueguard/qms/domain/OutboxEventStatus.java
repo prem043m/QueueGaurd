@@ -5,6 +5,7 @@ package com.queueguard.qms.domain;
  */
 public enum OutboxEventStatus {
     PENDING,
+    PROCESSING,
     PUBLISHED,
     FAILED
 }

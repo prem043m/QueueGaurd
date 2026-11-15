@@ -46,6 +46,7 @@ class Phase3PersistencePostgresTest {
         registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
         registry.add("spring.datasource.username", POSTGRES::getUsername);
         registry.add("spring.datasource.password", POSTGRES::getPassword);
+        registry.add("queueguard.outbox.enabled", () -> "false");
     }
 
     @Autowired private JdbcTemplate jdbc;
@@ -60,7 +61,7 @@ class Phase3PersistencePostgresTest {
 
     @Test
     void flywayRunsAllMigrationsAndCreatesPhase3Schema() {
-        assertEquals(5, jdbc.queryForObject(
+        assertEquals(7, jdbc.queryForObject(
                 "select count(*) from flyway_schema_history where success", Integer.class));
         for (String table : List.of("placement_drives", "candidate_profiles",
                 "candidate_applications", "interview_rounds", "interviewer_assignments",
@@ -73,6 +74,19 @@ class Phase3PersistencePostgresTest {
         assertConstraintExists("uq_interviewer_assignment_panel");
         assertConstraintExists("chk_candidate_application_accepted_eligible");
         assertConstraintExists("uq_candidate_application_profile_drive");
+        assertConstraintExists("chk_outbox_claim_state");
+        assertEquals(1, jdbc.queryForObject(
+                "select count(*) from pg_indexes where schemaname = current_schema() "
+                        + "and indexname = 'idx_outbox_aggregate_delivery_order'",
+                Integer.class));
+        for (String column : List.of(
+                "next_attempt_at", "claimed_at", "claim_token", "updated_at")) {
+            assertEquals(1, jdbc.queryForObject(
+                    "select count(*) from information_schema.columns "
+                            + "where table_schema = current_schema() "
+                            + "and table_name = 'outbox_events' and column_name = ?",
+                    Integer.class, column), column);
+        }
         assertConstraintExists("chk_candidate_application_capacity_reservation");
         assertConstraintExists("chk_interview_round_type");
         assertConstraintExists("uq_candidate_round_application_round");
@@ -87,6 +101,21 @@ class Phase3PersistencePostgresTest {
                 select count(*) from pg_indexes
                 where schemaname = current_schema()
                   and indexname = 'idx_candidate_application_org_drive'
+                """, Integer.class));
+        assertEquals(1, jdbc.queryForObject("""
+                select count(*) from pg_indexes
+                where schemaname = current_schema()
+                  and indexname = 'idx_interview_evaluation_interviewer_submitted'
+                """, Integer.class));
+        assertEquals(1, jdbc.queryForObject("""
+                select count(*) from pg_indexes
+                where schemaname = current_schema()
+                  and indexname = 'uq_evaluation_outbox_idempotency'
+                """, Integer.class));
+        assertEquals(1, jdbc.queryForObject("""
+                select count(*) from pg_trigger
+                where tgname = 'trg_interview_evaluation_immutable'
+                  and not tgisinternal
                 """, Integer.class));
     }
 

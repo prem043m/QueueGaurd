@@ -10,11 +10,105 @@ import org.springframework.data.repository.query.Param;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * Repository for OutboxEvent entities (transactional outbox pattern).
  */
 public interface OutboxEventRepository extends JpaRepository<OutboxEvent, Long> {
+
+    @Query(value = """
+            SELECT * FROM outbox_events
+            WHERE (
+                (processing_status = 'PENDING'
+                    AND next_attempt_at <= :now AND retry_count < :maxAttempts)
+                OR
+                (processing_status = 'PROCESSING'
+                    AND claimed_at <= :leaseExpiredAt AND retry_count < :maxAttempts)
+            )
+            AND NOT EXISTS (
+                SELECT 1
+                FROM outbox_events earlier
+                WHERE earlier.organization_id = outbox_events.organization_id
+                  AND earlier.aggregate_type = outbox_events.aggregate_type
+                  AND earlier.aggregate_id = outbox_events.aggregate_id
+                  AND (earlier.created_at, earlier.id)
+                      < (outbox_events.created_at, outbox_events.id)
+                  AND earlier.processing_status IN ('PENDING', 'PROCESSING')
+            )
+            ORDER BY created_at ASC, id ASC
+            LIMIT :batchSize
+            FOR UPDATE SKIP LOCKED
+            """, nativeQuery = true)
+    List<OutboxEvent> lockClaimableEvents(
+            @Param("now") Instant now,
+            @Param("leaseExpiredAt") Instant leaseExpiredAt,
+            @Param("maxAttempts") int maxAttempts,
+            @Param("batchSize") int batchSize);
+
+    @Modifying
+    @Query(value = """
+            UPDATE outbox_events
+            SET processing_status = 'FAILED',
+                last_error = 'Outbox publication attempts exhausted',
+                claimed_at = NULL,
+                claim_token = NULL,
+                updated_at = :now,
+                version = version + 1
+            WHERE retry_count >= :maxAttempts
+              AND (
+                processing_status = 'PENDING'
+                OR (processing_status = 'PROCESSING' AND claimed_at <= :leaseExpiredAt)
+              )
+            """, nativeQuery = true)
+    int failExhaustedEvents(
+            @Param("maxAttempts") int maxAttempts,
+            @Param("leaseExpiredAt") Instant leaseExpiredAt,
+            @Param("now") Instant now);
+
+    @Modifying
+    @Query(value = """
+            UPDATE outbox_events
+            SET processing_status = 'PUBLISHED',
+                published_at = :publishedAt,
+                last_error = NULL,
+                claimed_at = NULL,
+                claim_token = NULL,
+                updated_at = :publishedAt,
+                version = version + 1
+            WHERE id = :id
+              AND processing_status = 'PROCESSING'
+              AND claim_token = :claimToken
+            """, nativeQuery = true)
+    int markClaimedAsPublished(
+            @Param("id") Long id,
+            @Param("claimToken") UUID claimToken,
+            @Param("publishedAt") Instant publishedAt);
+
+    @Modifying
+    @Query(value = """
+            UPDATE outbox_events
+            SET processing_status =
+                    CASE WHEN :attemptNumber >= :maxAttempts THEN 'FAILED' ELSE 'PENDING' END,
+                next_attempt_at =
+                    CASE WHEN :attemptNumber >= :maxAttempts THEN next_attempt_at ELSE :nextAttemptAt END,
+                last_error = :error,
+                claimed_at = NULL,
+                claim_token = NULL,
+                updated_at = :updatedAt,
+                version = version + 1
+            WHERE id = :id
+              AND processing_status = 'PROCESSING'
+              AND claim_token = :claimToken
+            """, nativeQuery = true)
+    int recordPublicationFailure(
+            @Param("id") Long id,
+            @Param("claimToken") UUID claimToken,
+            @Param("attemptNumber") int attemptNumber,
+            @Param("maxAttempts") int maxAttempts,
+            @Param("nextAttemptAt") Instant nextAttemptAt,
+            @Param("error") String error,
+            @Param("updatedAt") Instant updatedAt);
     
     // Find pending events
     List<OutboxEvent> findByProcessingStatusAndPublishedAtIsNullOrderByCreatedAtAsc(
@@ -34,32 +128,6 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, Long> 
     
     // Find by idempotency key
     Optional<OutboxEvent> findByIdempotencyKey(String idempotencyKey);
-    
-    // Mark event as published
-    // Note: Bulk update bypasses optimistic locking. For outbox events, this is acceptable
-    // as they are typically updated by a single publisher process. Version conflicts are
-    // extremely unlikely but would result in lost updates if they occur.
-    @Modifying
-    @Query("UPDATE OutboxEvent oe SET oe.processingStatus = 'PUBLISHED', oe.publishedAt = :publishedAt, " +
-           "oe.version = oe.version + 1 " +
-           "WHERE oe.id = :id AND oe.processingStatus = 'PENDING'")
-    int markAsPublished(@Param("id") Long id, @Param("publishedAt") Instant publishedAt);
-    
-    // Mark event as failed with error
-    // Note: Bulk update bypasses optimistic locking. See note above.
-    @Modifying
-    @Query("UPDATE OutboxEvent oe SET oe.processingStatus = 'FAILED', oe.retryCount = oe.retryCount + 1, " +
-           "oe.lastError = :error, oe.version = oe.version + 1 " +
-           "WHERE oe.id = :id AND oe.processingStatus = 'PENDING'")
-    int markAsFailed(@Param("id") Long id, @Param("error") String error);
-    
-    // Reset failed events for retry
-    // Note: Bulk update bypasses optimistic locking. See note above.
-    @Modifying
-    @Query("UPDATE OutboxEvent oe SET oe.processingStatus = 'PENDING', oe.lastError = NULL, " +
-           "oe.version = oe.version + 1 " +
-           "WHERE oe.processingStatus = 'FAILED' AND oe.retryCount < :maxRetries")
-    int resetFailedEvents(@Param("maxRetries") Integer maxRetries);
     
     // Count pending events
     long countByProcessingStatus(OutboxEventStatus status);
