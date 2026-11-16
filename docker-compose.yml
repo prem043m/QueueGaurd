@@ -37,7 +37,7 @@ services:
 
   redis:
     image: redis:7-alpine
-    command: ["redis-server", "--appendonly", "yes"]
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "always"]
     volumes:
       - redisdata:/data
     ports:
@@ -170,8 +170,11 @@ services:
       <<: *common-env
       DB_NAME: qms_db
       SERVER_PORT: "8086"
+    ports:
+      - "8086:8086"
     depends_on:
       postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8086/health | grep -q UP || exit 1"]
       interval: 10s

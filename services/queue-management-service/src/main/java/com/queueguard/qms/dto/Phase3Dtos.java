@@ -192,4 +192,33 @@ public final class Phase3Dtos {
                     candidateRound.getUpdatedAt());
         }
     }
+
+    public record SubmitInterviewEvaluationRequest(
+            @NotNull @DecimalMin("0.00") @DecimalMax("100.00") @Digits(integer = 3, fraction = 2)
+            BigDecimal technicalScore,
+            @NotNull @DecimalMin("0.00") @DecimalMax("100.00") @Digits(integer = 3, fraction = 2)
+            BigDecimal communicationScore,
+            @NotNull @DecimalMin("0.00") @DecimalMax("100.00") @Digits(integer = 3, fraction = 2)
+            BigDecimal problemSolvingScore,
+            @NotNull @DecimalMin("0.00") @DecimalMax("100.00") @Digits(integer = 3, fraction = 2)
+            BigDecimal overallScore,
+            @NotNull EvaluationRecommendation recommendation,
+            @NotBlank @Size(max = 4000) String feedback) {}
+
+    public record InterviewEvaluationView(
+            Long id, Long organizationId, Long candidateRoundId, Long interviewerUserId,
+            BigDecimal technicalScore, BigDecimal communicationScore,
+            BigDecimal problemSolvingScore, BigDecimal overallScore,
+            EvaluationRecommendation recommendation, String feedback,
+            Instant submittedAt, Instant createdAt) {
+        public static InterviewEvaluationView from(InterviewEvaluation evaluation) {
+            return new InterviewEvaluationView(evaluation.getId(),
+                    evaluation.getOrganizationId(), evaluation.getCandidateRoundId(),
+                    evaluation.getInterviewerUserId(), evaluation.getTechnicalScore(),
+                    evaluation.getCommunicationScore(), evaluation.getProblemSolvingScore(),
+                    evaluation.getOverallScore(), evaluation.getRecommendation(),
+                    evaluation.getFeedback(), evaluation.getSubmittedAt(),
+                    evaluation.getCreatedAt());
+        }
+    }
 }

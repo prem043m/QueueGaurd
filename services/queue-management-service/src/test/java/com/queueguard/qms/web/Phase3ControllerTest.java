@@ -29,6 +29,7 @@ class Phase3ControllerTest {
     private static final long STUDENT_ID = 102L;
     private static final long INTERVIEWER_ID = 103L;
     private static final long OTHER_STUDENT_ID = 104L;
+    private static final long UNASSIGNED_INTERVIEWER_ID = 105L;
 
     @Container
     private static final PostgreSQLContainer<?> POSTGRES =
@@ -42,6 +43,7 @@ class Phase3ControllerTest {
         registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
         registry.add("spring.datasource.username", POSTGRES::getUsername);
         registry.add("spring.datasource.password", POSTGRES::getPassword);
+        registry.add("queueguard.outbox.enabled", () -> "false");
     }
 
     @Autowired private MockMvc mockMvc;
@@ -64,6 +66,7 @@ class Phase3ControllerTest {
         addMember(STUDENT_ID, "MEMBER");
         addMember(INTERVIEWER_ID, "INTERVIEWER");
         addMember(OTHER_STUDENT_ID, "MEMBER");
+        addMember(UNASSIGNED_INTERVIEWER_ID, "INTERVIEWER");
     }
 
     @Test
@@ -313,6 +316,131 @@ class Phase3ControllerTest {
     }
 
     @Test
+    void interviewEvaluationControllerEnforcesOwnershipAndKeepsDecisionsSeparate()
+            throws Exception {
+        long candidateRoundId = createCandidateRoundForEvaluation();
+        String evaluationsPath = orgPath(
+                "/candidate-rounds/" + candidateRoundId + "/evaluations");
+        String request = """
+                {"technicalScore":81.25,"communicationScore":75.00,
+                 "problemSolvingScore":70.00,"overallScore":80.00,
+                 "recommendation":"RECOMMEND","feedback":"Structured feedback"}
+                """;
+
+        mockMvc.perform(post(evaluationsPath)
+                        .header("Authorization", bearer(INTERVIEWER_ID))
+                        .contentType("application/json")
+                        .content(request))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.organizationId").value(organizationId))
+                .andExpect(jsonPath("$.data.candidateRoundId").value(candidateRoundId))
+                .andExpect(jsonPath("$.data.interviewerUserId").value(INTERVIEWER_ID))
+                .andExpect(jsonPath("$.data.technicalScore").value(81.25))
+                .andExpect(jsonPath("$.data.recommendation").value("RECOMMEND"))
+                .andExpect(jsonPath("$.data.submittedAt").isString())
+                .andExpect(jsonPath("$.data.version").doesNotExist());
+
+        org.junit.jupiter.api.Assertions.assertNull(jdbc.queryForObject(
+                "select result from candidate_rounds where id = ?",
+                String.class, candidateRoundId));
+        mockMvc.perform(post(evaluationsPath)
+                        .header("Authorization", bearer(INTERVIEWER_ID))
+                        .contentType("application/json")
+                        .content(request))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.success").value(false));
+
+        mockMvc.perform(get(evaluationsPath)
+                        .header("Authorization", bearer(INTERVIEWER_ID)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data", hasSize(1)));
+        mockMvc.perform(get(evaluationsPath)
+                        .header("Authorization", bearer(MANAGER_ID)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data", hasSize(1)));
+        mockMvc.perform(get(evaluationsPath)
+                        .header("Authorization", bearer(STUDENT_ID)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.success").value(false));
+        mockMvc.perform(get(evaluationsPath)
+                        .header("Authorization", bearer(OTHER_STUDENT_ID)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.success").value(false));
+
+        mockMvc.perform(get(orgPath("/evaluations/me"))
+                        .header("Authorization", bearer(INTERVIEWER_ID)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data", hasSize(1)))
+                .andExpect(jsonPath("$.data[0].interviewerUserId").value(INTERVIEWER_ID));
+        mockMvc.perform(get(orgPath("/evaluations/me"))
+                        .header("Authorization", bearer(MANAGER_ID)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.success").value(false));
+        mockMvc.perform(post(evaluationsPath)
+                        .header("Authorization", bearer(UNASSIGNED_INTERVIEWER_ID))
+                        .contentType("application/json")
+                        .content(request))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.success").value(false));
+        mockMvc.perform(post(evaluationsPath)
+                        .header("Authorization", bearer(STUDENT_ID))
+                        .contentType("application/json")
+                        .content(request))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.success").value(false));
+
+        long otherOrganizationId = jdbc.queryForObject("""
+                insert into organizations
+                    (name, organization_type, status, created_at, updated_at)
+                values ('Private Evaluation Org', 'COLLEGE', 'ACTIVE', now(), now())
+                returning id
+                """, Long.class);
+        mockMvc.perform(get("/api/v1/organizations/" + otherOrganizationId
+                        + "/candidate-rounds/" + candidateRoundId + "/evaluations")
+                        .header("Authorization", bearer(MANAGER_ID)))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.success").value(false));
+        mockMvc.perform(put(evaluationsPath)
+                        .header("Authorization", bearer(INTERVIEWER_ID))
+                        .contentType("application/json")
+                        .content(request))
+                .andExpect(status().isMethodNotAllowed());
+        mockMvc.perform(delete(evaluationsPath)
+                        .header("Authorization", bearer(INTERVIEWER_ID)))
+                .andExpect(status().isMethodNotAllowed());
+    }
+
+    @Test
+    void interviewEvaluationRequestValidationRejectsInvalidScoresAndMissingFields()
+            throws Exception {
+        long candidateRoundId = createCandidateRoundForEvaluation();
+        String evaluationsPath = orgPath(
+                "/candidate-rounds/" + candidateRoundId + "/evaluations");
+
+        expectValidationFailure(post(evaluationsPath)
+                .content("""
+                        {"technicalScore":-0.01,"communicationScore":75.00,
+                         "problemSolvingScore":70.00,"overallScore":80.00,
+                         "recommendation":"RECOMMEND","feedback":"Feedback"}
+                        """));
+        expectValidationFailure(post(evaluationsPath)
+                .content("""
+                        {"technicalScore":100.01,"communicationScore":75.00,
+                         "problemSolvingScore":70.00,"overallScore":80.00,
+                         "recommendation":"RECOMMEND","feedback":"Feedback"}
+                        """));
+        expectValidationFailure(post(evaluationsPath)
+                .content("""
+                        {"technicalScore":81.25,"communicationScore":75.00,
+                         "problemSolvingScore":70.00,"overallScore":80.00}
+                        """));
+        org.junit.jupiter.api.Assertions.assertEquals(0, jdbc.queryForObject(
+                "select count(*) from interview_evaluations where organization_id = ?",
+                Integer.class, organizationId));
+    }
+
+    @Test
     void fullReplacementResourcesUsePutWhilePatchIsReservedForPartialOperations()
             throws Exception {
         long draftDriveId = insertDrive("DRAFT");
@@ -406,6 +534,46 @@ class Phase3ControllerTest {
                     .andExpect(jsonPath("$.message").isString())
                     .andExpect(jsonPath("$.data").doesNotExist());
         }
+    }
+
+    @Test
+    void openApiDeclaresBearerSchemeOnlyOnProtectedOperations() throws Exception {
+        mockMvc.perform(get("/v3/api-docs"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.components.securitySchemes.bearerAuth.type")
+                        .value("http"))
+                .andExpect(jsonPath("$.components.securitySchemes.bearerAuth.scheme")
+                        .value("bearer"))
+                .andExpect(jsonPath("$.components.securitySchemes.bearerAuth.bearerFormat")
+                        .value("JWT"))
+                .andExpect(jsonPath("$.security").doesNotExist())
+                .andExpect(jsonPath(
+                        "$.paths['/api/v1/organizations/{orgId}/drives'].post.security[0].bearerAuth")
+                        .isEmpty())
+                .andExpect(jsonPath(
+                        "$.paths['/v1/organizations'].post.security[0].bearerAuth")
+                        .isEmpty())
+                .andExpect(jsonPath("$.paths['/health'].get.security").doesNotExist());
+
+        mockMvc.perform(get("/swagger-ui/index.html"))
+                .andExpect(status().isOk());
+        mockMvc.perform(get("/health"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("UP"));
+    }
+
+    @Test
+    void invalidJwtIsRejectedAndValidJwtStillAuthenticatesTenantRoute() throws Exception {
+        mockMvc.perform(get("/v1/organizations/mine")
+                        .header("Authorization", "Bearer not-a-valid-jwt"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.message").value("Invalid token"));
+
+        mockMvc.perform(get("/v1/organizations/mine")
+                        .header("Authorization", bearer(STUDENT_ID)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data[0].userId").value(STUDENT_ID));
     }
 
     @Test
@@ -606,6 +774,25 @@ class Phase3ControllerTest {
                 Timestamp.from(now));
     }
 
+    private long createCandidateRoundForEvaluation() throws Exception {
+        long profileId = insertProfile(STUDENT_ID);
+        long driveId = insertDrive("PUBLISHED");
+        long queueId = insertOpenQueueConfiguration("EVALUATIONS");
+        long roundId = insertRound(driveId, queueId);
+        jdbc.update("update interview_rounds set status = 'OPEN' where id = ?", roundId);
+        insertInterviewerAssignment(roundId, INTERVIEWER_ID);
+        long applicationId = insertAcceptedApplication(driveId, profileId, STUDENT_ID);
+        mockMvc.perform(post(orgPath("/rounds/" + roundId + "/applications/"
+                        + applicationId + "/register"))
+                        .header("Authorization", bearer(MANAGER_ID)))
+                .andExpect(status().isOk());
+        return jdbc.queryForObject("""
+                select id from candidate_rounds
+                where organization_id = ? and candidate_application_id = ?
+                  and interview_round_id = ?
+                """, Long.class, organizationId, applicationId, roundId);
+    }
+
     private long insertCompletedCandidateRound(long driveId, long roundId, long studentId)
             throws Exception {
         addMember(studentId, "MEMBER");
@@ -700,6 +887,9 @@ class Phase3ControllerTest {
                 "/api/v1/organizations/1/applications/me",
                 "/api/v1/organizations/1/rounds?status=DRAFT",
                 "/api/v1/organizations/1/assignments/me",
-                "/api/v1/organizations/1/rounds/1/candidates");
+                "/api/v1/organizations/1/rounds/1/candidates",
+                "/api/v1/organizations/1/candidate-rounds/1/evaluations",
+                "/api/v1/organizations/1/evaluations/me",
+                "/v1/organizations/mine");
     }
 }

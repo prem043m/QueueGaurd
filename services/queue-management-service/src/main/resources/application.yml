@@ -13,10 +13,26 @@ spring:
     open-in-view: false
   flyway:
     enabled: true
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      timeout: ${REDIS_TIMEOUT:2s}
+      repositories:
+        enabled: false
 queueguard:
   jwt:
     secret: ${JWT_SECRET:queueguard-dev-secret-change-me-in-prod-01}
     ttl-seconds: ${JWT_TTL_SECONDS:86400}
+  outbox:
+    enabled: ${OUTBOX_ENABLED:true}
+    stream-key: ${OUTBOX_STREAM_KEY:qg:qms:outbox}
+    batch-size: ${OUTBOX_BATCH_SIZE:50}
+    polling-interval-ms: ${OUTBOX_POLLING_INTERVAL_MS:1000}
+    max-attempts: ${OUTBOX_MAX_ATTEMPTS:10}
+    initial-retry-delay-ms: ${OUTBOX_INITIAL_RETRY_DELAY_MS:1000}
+    max-retry-delay-ms: ${OUTBOX_MAX_RETRY_DELAY_MS:300000}
+    lease-duration-ms: ${OUTBOX_LEASE_DURATION_MS:300000}
 management:
   endpoints:
     web:

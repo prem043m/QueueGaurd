@@ -2,6 +2,7 @@ package com.queueguard.qms.domain;
 
 import jakarta.persistence.*;
 import java.time.Instant;
+import java.util.UUID;
 
 /**
  * Transactional outbox event for reliable event publishing.
@@ -34,6 +35,18 @@ public class OutboxEvent {
     
     @Column(name = "published_at")
     private Instant publishedAt;
+
+    @Column(name = "next_attempt_at", nullable = false)
+    private Instant nextAttemptAt = Instant.now();
+
+    @Column(name = "claimed_at")
+    private Instant claimedAt;
+
+    @Column(name = "claim_token")
+    private UUID claimToken;
+
+    @Column(name = "updated_at", nullable = false)
+    private Instant updatedAt = Instant.now();
     
     @Enumerated(EnumType.STRING)
     @Column(name = "processing_status", nullable = false, length = 20)
@@ -116,6 +129,38 @@ public class OutboxEvent {
     
     public void setPublishedAt(Instant publishedAt) {
         this.publishedAt = publishedAt;
+    }
+
+    public Instant getNextAttemptAt() {
+        return nextAttemptAt;
+    }
+
+    public void setNextAttemptAt(Instant nextAttemptAt) {
+        this.nextAttemptAt = nextAttemptAt;
+    }
+
+    public Instant getClaimedAt() {
+        return claimedAt;
+    }
+
+    public void setClaimedAt(Instant claimedAt) {
+        this.claimedAt = claimedAt;
+    }
+
+    public UUID getClaimToken() {
+        return claimToken;
+    }
+
+    public void setClaimToken(UUID claimToken) {
+        this.claimToken = claimToken;
+    }
+
+    public Instant getUpdatedAt() {
+        return updatedAt;
+    }
+
+    public void setUpdatedAt(Instant updatedAt) {
+        this.updatedAt = updatedAt;
     }
     
     public OutboxEventStatus getProcessingStatus() {

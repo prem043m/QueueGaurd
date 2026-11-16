@@ -6,10 +6,12 @@ import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface InterviewEvaluationRepository
         extends JpaRepository<InterviewEvaluation, Long> {
-    List<InterviewEvaluation> findByOrganizationIdAndCandidateRoundIdOrderBySubmittedAt(
+    List<InterviewEvaluation>
+            findByOrganizationIdAndCandidateRoundIdOrderBySubmittedAtAscIdAsc(
             Long organizationId, Long candidateRoundId);
 
-    List<InterviewEvaluation> findByOrganizationIdAndInterviewerUserIdOrderBySubmittedAtDesc(
+    List<InterviewEvaluation>
+            findByOrganizationIdAndInterviewerUserIdOrderBySubmittedAtDescIdDesc(
             Long organizationId, Long interviewerUserId);
 
     boolean existsByOrganizationIdAndCandidateRoundIdAndInterviewerUserId(
