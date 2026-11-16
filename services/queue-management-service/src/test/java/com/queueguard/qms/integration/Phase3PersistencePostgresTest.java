@@ -225,8 +225,9 @@ class Phase3PersistencePostgresTest {
                 "TECHNICAL", Instant.now(), Instant.now().plusSeconds(60), "DRAFT"));
         assertSqlState("23514", () -> insertRoundWithValues(fixture, 2,
                 "NOT_A_ROUND_TYPE", Instant.now(), Instant.now().plusSeconds(60), "DRAFT"));
+        Instant invalidSchedule = Instant.now();
         assertSqlState("23514", () -> insertRoundWithValues(fixture, 2,
-                "TECHNICAL", Instant.now(), Instant.now(), "DRAFT"));
+                "TECHNICAL", invalidSchedule, invalidSchedule, "DRAFT"));
 
         Instant reservation = Instant.now();
         assertSqlState("23514", () -> updateApplication(fixture.applicationId(),
