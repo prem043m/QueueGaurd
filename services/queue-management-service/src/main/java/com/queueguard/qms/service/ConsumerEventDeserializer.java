@@ -18,8 +18,8 @@ public class ConsumerEventDeserializer {
         this.objectMapper = objectMapper;
     }
 
-    public ConsumerEvent deserialize(MapRecord<String, String, String> record) {
-        Map<String, String> fields = new LinkedHashMap<>(record.getValue());
+    public ConsumerEvent deserialize(MapRecord<String, ?, ?> record) {
+        Map<String, String> fields = stringFields(record.getValue());
         String eventId = required(fields, "eventId", 100);
         if (!eventId.matches("[1-9][0-9]*")) {
             throw new PermanentEventException("Invalid eventId");
@@ -52,6 +52,17 @@ public class ConsumerEventDeserializer {
                 parseInstant(createdAt),
                 optional(fields, "idempotencyKey", 100),
                 Map.copyOf(fields));
+    }
+
+    private static Map<String, String> stringFields(Map<?, ?> rawFields) {
+        Map<String, String> fields = new LinkedHashMap<>();
+        rawFields.forEach((key, value) -> {
+            if (!(key instanceof String fieldName) || !(value instanceof String fieldValue)) {
+                throw new PermanentEventException("Event fields must be strings");
+            }
+            fields.put(fieldName, fieldValue);
+        });
+        return fields;
     }
 
     private static String required(Map<String, String> fields, String name, int maxLength) {

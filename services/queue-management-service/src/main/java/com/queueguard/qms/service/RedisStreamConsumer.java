@@ -61,14 +61,14 @@ public class RedisStreamConsumer {
             return;
         }
         try {
-            List<MapRecord<String, String, String>> records = redis.opsForStream().read(
+            List<MapRecord<String, Object, Object>> records = redis.opsForStream().read(
                     Consumer.from(properties.groupName(), consumerIdentity),
                     StreamReadOptions.empty()
                             .count(properties.batchSize())
                             .block(Duration.ofMillis(properties.blockingTimeoutMs())),
                     StreamOffset.create(properties.streamKey(), ReadOffset.lastConsumed()));
             if (records != null) {
-                for (MapRecord<String, String, String> record : records) {
+                for (MapRecord<String, Object, Object> record : records) {
                     if (stopping.get()) {
                         return;
                     }
@@ -96,16 +96,17 @@ public class RedisStreamConsumer {
                 if (stopping.get() || recovered >= properties.batchSize()) {
                     return;
                 }
-                int priorDeliveries = Math.max(1, message.getTotalDeliveryCount());
+                int priorDeliveries = (int) Math.min(Integer.MAX_VALUE,
+                        Math.max(1L, message.getTotalDeliveryCount()));
                 Duration idleThreshold = Duration.ofMillis(
                         properties.retryDelayMillis(priorDeliveries));
-                List<MapRecord<String, String, String>> claimed = redis.opsForStream().claim(
+                List<MapRecord<String, Object, Object>> claimed = redis.opsForStream().claim(
                         properties.streamKey(),
                         properties.groupName(),
                         consumerIdentity,
                         idleThreshold,
                         message.getId());
-                for (MapRecord<String, String, String> record : claimed) {
+                for (MapRecord<String, Object, Object> record : claimed) {
                     recovered++;
                     process(record, priorDeliveries + 1);
                 }
@@ -150,7 +151,7 @@ public class RedisStreamConsumer {
         }
     }
 
-    private void process(MapRecord<String, String, String> record, int deliveryAttempt) {
+    private void process(MapRecord<String, Object, Object> record, int deliveryAttempt) {
         if (stopping.get()) {
             return;
         }
@@ -166,20 +167,21 @@ public class RedisStreamConsumer {
         ProcessingResult result;
         try {
             result = processing.process(event, deliveryAttempt);
-        } catch (PermanentEventException exception) {
-            int attempts = recordFailure(event, deliveryAttempt, exception);
-            if (attempts >= 0) {
-                deadLetterAndAcknowledge(
-                        record, event, attempts, safeFailure(exception));
-            }
-            return;
         } catch (RuntimeException exception) {
+            if (ConsumerFailureClassifier.classify(exception)
+                    == ConsumerFailureClassifier.FailureKind.PERMANENT) {
             int attempts = recordFailure(event, deliveryAttempt, exception);
-            if (attempts >= properties.maxAttempts()
-                    || (attempts < 0 && deliveryAttempt >= properties.maxAttempts())) {
                 deadLetterAndAcknowledge(
                         record, event, Math.max(deliveryAttempt, attempts),
                         safeFailure(exception));
+            } else {
+                int attempts = recordFailure(event, deliveryAttempt, exception);
+                if (attempts >= properties.maxAttempts()
+                        || (attempts < 0 && deliveryAttempt >= properties.maxAttempts())) {
+                    deadLetterAndAcknowledge(
+                            record, event, Math.max(deliveryAttempt, attempts),
+                            safeFailure(exception));
+                }
             }
             return;
         }
@@ -187,7 +189,7 @@ public class RedisStreamConsumer {
         if (result.disposition() == Disposition.EXHAUSTED) {
             deadLetterAndAcknowledge(
                     record, event, result.attemptCount(),
-                    safeFailure(result.lastError()));
+                    safeFailureMessage(result.lastError()));
         } else if (result.disposition() == Disposition.ALREADY_DEAD_LETTERED) {
             acknowledge(record);
         } else {
@@ -208,14 +210,16 @@ public class RedisStreamConsumer {
     }
 
     private void deadLetterAndAcknowledge(
-            MapRecord<String, String, String> record,
+            MapRecord<String, Object, Object> record,
             ConsumerEvent event,
             int attemptCount,
             String reason) {
         if (stopping.get()) {
             return;
         }
-        Map<String, String> fields = record.getValue();
+        Map<String, String> fields = new java.util.LinkedHashMap<>();
+        record.getValue().forEach((key, value) ->
+                fields.put(String.valueOf(key), String.valueOf(value)));
         String eventId = event == null ? fields.get("eventId") : event.eventId();
         try {
             deadLetterPublisher.publish(
@@ -238,13 +242,13 @@ public class RedisStreamConsumer {
         acknowledge(record);
     }
 
-    private void acknowledge(MapRecord<String, String, String> record) {
+    private void acknowledge(MapRecord<String, Object, Object> record) {
         if (stopping.get()) {
             return;
         }
         try {
             redis.opsForStream().acknowledge(
-                    properties.groupName(), record.getId());
+                    properties.groupName(), consumerIdentity, record.getId());
         } catch (DataAccessException exception) {
             logRedisFailure("acknowledgement", exception);
         }
@@ -270,5 +274,9 @@ public class RedisStreamConsumer {
             return "processing failed";
         }
         return "processing failed (" + exception.getClass().getSimpleName() + ")";
+    }
+
+    private static String safeFailureMessage(String message) {
+        return message == null || message.isBlank() ? "processing attempts exhausted" : message;
     }
 }

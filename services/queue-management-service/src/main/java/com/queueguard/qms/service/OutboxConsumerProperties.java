@@ -26,7 +26,7 @@ public record OutboxConsumerProperties(
                 || batchSize < 1 || blockingTimeoutMs < 1 || pollingIntervalMs < 1
                 || pendingRecoveryIntervalMs < 1 || minimumPendingIdleMs < 1
                 || maxAttempts < 1 || initialRetryDelayMs < 1
-                || maxRetryDelayMs < initialRetryDelayMs) {
+                || maxRetryDelayMs < Math.max(initialRetryDelayMs, minimumPendingIdleMs)) {
             throw new IllegalArgumentException("Invalid QMS stream consumer settings");
         }
     }

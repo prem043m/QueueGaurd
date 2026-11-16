@@ -1,8 +1,6 @@
 package com.queueguard.qms.service;
 
-import java.time.Instant;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -36,13 +34,14 @@ public class RedisDeadLetterPublisher {
             String sourceMessageId,
             int attemptCount,
             String failureReason) {
-        Map<String, String> fields = new LinkedHashMap<>(originalFields);
-        fields.put("failureReason", failureReason);
-        fields.put("attemptCount", Integer.toString(attemptCount));
-        fields.put("failedAt", Instant.now().toString());
-        fields.put("sourceStream", properties.streamKey());
-        fields.put("sourceMessageId", sourceMessageId);
-        fields.put("consumerGroup", properties.groupName());
+        Map<String, String> fields = DeadLetterEnvelope.create(
+                originalFields,
+                properties.streamKey(),
+                sourceMessageId,
+                properties.groupName(),
+                attemptCount,
+                failureReason,
+                java.time.Instant.now());
 
         String identity = eventId == null || eventId.isBlank()
                 ? "invalid-" + sourceMessageId
