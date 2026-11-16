@@ -76,6 +76,7 @@ public class RedisStreamConsumer {
                 }
             }
         } catch (DataAccessException exception) {
+            resetGroupReadinessIfMissing(exception);
             logRedisFailure("read", exception);
         }
     }
@@ -106,13 +107,42 @@ public class RedisStreamConsumer {
                         consumerIdentity,
                         idleThreshold,
                         message.getId());
+                if (claimed.isEmpty()) {
+                    List<MapRecord<String, Object, Object>> source =
+                            redis.opsForStream().range(
+                                    properties.streamKey(),
+                                    Range.closed(
+                                            message.getId().getValue(),
+                                            message.getId().getValue()));
+                    if (source == null || source.isEmpty()) {
+                        deadLetterMissingEntry(message, priorDeliveries + 1);
+                    }
+                }
                 for (MapRecord<String, Object, Object> record : claimed) {
                     recovered++;
                     process(record, priorDeliveries + 1);
                 }
             }
         } catch (DataAccessException exception) {
+            resetGroupReadinessIfMissing(exception);
             logRedisFailure("pending-message recovery", exception);
+        }
+    }
+
+    private void deadLetterMissingEntry(PendingMessage message, int attemptCount) {
+        if (stopping.get()) {
+            return;
+        }
+        try {
+            deadLetterPublisher.publish(
+                    Map.of(),
+                    null,
+                    message.getId().getValue(),
+                    attemptCount,
+                    "source stream entry was deleted; original payload unavailable");
+            acknowledge(message.getId());
+        } catch (DataAccessException exception) {
+            logRedisFailure("missing-entry dead-letter publication", exception);
         }
     }
 
@@ -243,12 +273,16 @@ public class RedisStreamConsumer {
     }
 
     private void acknowledge(MapRecord<String, Object, Object> record) {
+        acknowledge(record.getId());
+    }
+
+    private void acknowledge(RecordId recordId) {
         if (stopping.get()) {
             return;
         }
         try {
             redis.opsForStream().acknowledge(
-                    properties.groupName(), consumerIdentity, record.getId());
+                    properties.streamKey(), properties.groupName(), recordId);
         } catch (DataAccessException exception) {
             logRedisFailure("acknowledgement", exception);
         }
@@ -267,6 +301,16 @@ public class RedisStreamConsumer {
             }
         }
         return false;
+    }
+
+    private void resetGroupReadinessIfMissing(Throwable exception) {
+        for (Throwable cause = exception; cause != null; cause = cause.getCause()) {
+            if (cause.getMessage() != null
+                    && cause.getMessage().contains("NOGROUP")) {
+                groupReady.set(false);
+                return;
+            }
+        }
     }
 
     private static String safeFailure(Throwable exception) {

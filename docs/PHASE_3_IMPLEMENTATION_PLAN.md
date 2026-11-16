@@ -1,13 +1,12 @@
 # QueueGuard Phase 3 - Student Interview Management System
 ## Implementation Plan
 
-**Version:** 2.9
-**Date:** 2026-11-15
-**Status:** Milestones 3.1-3.7 implemented and verified; downstream consumers and analytics remain future work
+**Version:** 2.10
+**Date:** 2026-11-16
+**Status:** Milestones 3.1-3.8 implemented and verified; downstream business effects and analytics remain future work
 
-Version 2.9 adds the QMS Redis Streams outbox publisher, PostgreSQL claim
-leases, bounded retries, and at-least-once delivery to Version 2.8's immutable
-evaluation and transactional outbox writer.
+Version 2.10 records the Redis Streams consumer, PostgreSQL inbox, retry and
+dead-letter behavior, and verification of Version 2.9's outbox publisher.
 
 ## 1. Scope and principles
 
@@ -1377,3 +1376,100 @@ suite also started Redis 7 Testcontainers and verified stream contents,
 concurrent claims, retries, lease recovery, per-aggregate ordering, and
 duplicate publication identity. `docker compose config -q` and
 `git diff --check` passed.
+
+## 19. Version 2.10 - Milestone 3.8 consumer verification
+
+### Consumer and inbox contract
+
+QMS consumes the Phase 3.7 stream configured by
+`queueguard.consumer.stream-key` (default `qg:qms:outbox`) through the stable
+consumer group `qg:qms:domain-events-v1`. Each process uses a unique Redis
+consumer identity derived from the configured identity prefix. Batch size,
+blocking read timeout, recovery interval, minimum pending idle time, retry
+limits, and dead-letter stream are externally configurable. The consumer
+deserializer validates the Phase 3.7 envelope fields; the publisher's event
+identity and field names are unchanged.
+
+V8 adds `qms_event_inbox`, including a database unique constraint on
+`(consumer_name, event_id)`, organization FK, status and attempt constraints,
+and organization/status indexes. The transactional processing service inserts
+or locks the inbox row, invokes the registered handler, and marks it PROCESSED
+in one PostgreSQL transaction. The current handler supports the nine existing
+QueueService outbox event types and `EVALUATION_SUBMITTED`, but performs no
+additional business mutation: the inbox is the consumer's durable processing
+record. Future handlers must keep database effects in the same transaction.
+
+The Redis ACK uses the stream key, consumer-group name, and record ID, and is
+issued only after the transactional service returns (therefore after commit).
+Already-PROCESSED deliveries are safely ACKed without invoking an effect again.
+If the process crashes after commit and before ACK, Redis can redeliver the
+message; the inbox unique key prevents a repeated database effect. This is
+at-least-once delivery with transactional idempotency, not exactly-once
+delivery.
+
+### Pending recovery, retry, and dead letters
+
+Pending recovery reads a bounded pending-message page and uses Spring Data
+Redis `XCLAIM` with a minimum-idle threshold derived from the configured
+minimum pending idle time and bounded exponential retry delay. Messages claimed
+by another consumer remain subject to the same inbox lock and processing path.
+If Redis loses the group while the process remains live, a `NOGROUP` response
+invalidates cached group readiness so a later poll recreates the group and
+replay is deduplicated.
+
+Transient processing failures are stored in a separate `REQUIRES_NEW`
+transaction and leave the stream entry pending for retry. Permanent invalid or
+unsupported events are dead-lettered. After the configured retry limit, the
+consumer publishes to the dead-letter stream using an atomic Lua deduplication
+key, marks a valid inbox record DEAD_LETTERED, and only then ACKs the source
+entry. A failed dead-letter write or status update leaves the original
+recoverable. If a pending source entry was deleted, its unavailable payload
+cannot be reconstructed: the consumer writes a tombstone with source stream
+and message ID plus failure metadata, then ACKs only after that tombstone is
+stored. Loss of the entire Redis stream without durable Redis recovery remains
+outside the consumer's guarantees.
+
+Shutdown sets a stop flag and prevents additional processing/ACKs. An
+in-flight database commit followed by a skipped ACK remains recoverable through
+the inbox deduplication path. No downstream business consumer, dead-letter
+replay API, or exactly-once guarantee is included.
+
+### Review corrections and remaining risks
+
+- Corrected the ACK argument order: Redis now receives the stream key and
+  consumer-group name rather than the process consumer identity.
+- Corrected integration fixture isolation so each test consumer is recreated
+  after its Redis stream is cleared; manual pending-message tests create the
+  consumer group before reading.
+- Verified failed database transactions persist retry metadata in a separate
+  transaction while leaving the source pending.
+- Added PostgreSQL/Redis integration scenarios for deleted pending entries and
+  group loss during a live process.
+- Recovery scans a bounded pending page per poll; very large pending lists can
+  increase recovery latency. Operational metrics, DLQ replay, and payload
+  retention policy remain follow-up work. Changing the logical consumer name
+  intentionally creates a separate inbox deduplication namespace.
+
+### Verification
+
+Focused consumer verification:
+
+```text
+mvn --batch-mode --no-transfer-progress "-Dtest=OutboxConsumerPostgresRedisTest,ConsumerEventDeserializerTest,QmsEventHandlerRegistryTest,OutboxConsumerPropertiesTest" "-Dsurefire.failIfNoSpecifiedTests=false" test
+```
+
+Result: **17 tests, 0 failures, 0 errors, 0 skipped**. The 11 consumer
+integration scenarios ran against actual PostgreSQL 15.20 and Redis 7
+Testcontainers.
+
+Full clean reactor verification:
+
+```text
+mvn --batch-mode --no-transfer-progress clean verify
+```
+
+Result: **BUILD SUCCESS**; **155 tests** total (QMS 148, Queue Service 4,
+Common 3), **0 failures, 0 errors, 0 skipped**. PostgreSQL 15.20 Testcontainers
+ran for 71 integration tests across QMS; Redis 7 Testcontainers ran for the
+18 publisher and consumer integration scenarios. V1-V8 validated and applied
+in QMS database test containers.

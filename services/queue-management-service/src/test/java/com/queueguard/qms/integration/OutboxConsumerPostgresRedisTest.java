@@ -8,6 +8,7 @@ import com.queueguard.qms.domain.InboxEventStatus;
 import com.queueguard.qms.repo.InboxEventRepository;
 import com.queueguard.qms.service.ConsumerEvent;
 import com.queueguard.qms.service.ConsumerEventDeserializer;
+import com.queueguard.qms.service.InboxEventFailureService;
 import com.queueguard.qms.service.InboxEventProcessingService;
 import com.queueguard.qms.service.OutboxConsumerProperties;
 import com.queueguard.qms.service.RedisDeadLetterPublisher;
@@ -35,6 +36,7 @@ import org.springframework.data.redis.connection.stream.Consumer;
 import org.springframework.data.redis.connection.stream.MapRecord;
 import org.springframework.data.redis.connection.stream.PendingMessages;
 import org.springframework.data.redis.connection.stream.ReadOffset;
+import org.springframework.data.redis.connection.stream.RecordId;
 import org.springframework.data.redis.connection.stream.StreamOffset;
 import org.springframework.data.redis.connection.stream.StreamReadOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -96,11 +98,12 @@ class OutboxConsumerPostgresRedisTest {
     @Autowired private JdbcTemplate jdbc;
     @Autowired private InboxEventRepository inboxRepository;
     @Autowired private InboxEventProcessingService processing;
+    @Autowired private InboxEventFailureService failures;
     @Autowired private ConsumerEventDeserializer deserializer;
     @Autowired private OutboxConsumerProperties properties;
-    @Autowired private RedisStreamConsumer consumer;
     @Autowired private RedisDeadLetterPublisher deadLetterPublisher;
     @Autowired private StringRedisTemplate redis;
+    private RedisStreamConsumer consumer;
 
     @BeforeEach
     void clearState() {
@@ -111,7 +114,8 @@ class OutboxConsumerPostgresRedisTest {
         if (dedupeKeys != null && !dedupeKeys.isEmpty()) {
             redis.delete(dedupeKeys);
         }
-        consumer.pollNewMessages();
+        consumer = new RedisStreamConsumer(
+                redis, properties, deserializer, processing, failures, deadLetterPublisher);
     }
 
     @Test
@@ -164,8 +168,8 @@ class OutboxConsumerPostgresRedisTest {
         try {
             consumer.pollNewMessages();
             assertEquals(1, pendingCount());
-            assertTrue(inboxRepository.findAttemptCount(
-                    properties.consumerName(), eventId).isEmpty());
+            assertEquals(1, inboxRepository.findAttemptCount(
+                    properties.consumerName(), eventId).orElseThrow());
         } finally {
             removeProcessingFailureTrigger();
         }
@@ -227,9 +231,7 @@ class OutboxConsumerPostgresRedisTest {
         addEvent(firstId, organizationId, "EVALUATION_SUBMITTED");
         addEvent(secondId, organizationId, "QUEUE_ENTRY_REGISTERED");
         RedisStreamConsumer secondConsumer = new RedisStreamConsumer(
-                redis, properties, deserializer, processing,
-                org.springframework.test.util.ReflectionTestUtils.invokeGetter(
-                        consumer, "failures"),
+                redis, properties, deserializer, processing, failures,
                 deadLetterPublisher);
         // The second poller shares the logical group but gets a fresh Redis consumer identity.
         assertNotNull(secondConsumer);
@@ -264,8 +266,7 @@ class OutboxConsumerPostgresRedisTest {
         addEvent(eventId, organizationId, "EVALUATION_SUBMITTED");
         readAs("abandoned-consumer");
         RedisStreamConsumer secondConsumer = new RedisStreamConsumer(
-                redis, properties, deserializer, processing,
-                failures(), deadLetterPublisher);
+                redis, properties, deserializer, processing, failures, deadLetterPublisher);
 
         CountDownLatch start = new CountDownLatch(1);
         ExecutorService executor = Executors.newFixedThreadPool(2);
@@ -290,6 +291,44 @@ class OutboxConsumerPostgresRedisTest {
     }
 
     @Test
+    void deletedPendingEntryIsDeadLetteredAndAcknowledged() {
+        long organizationId = createOrganization();
+        RecordId messageId = addEvent(
+                nextEventId(), organizationId, "EVALUATION_SUBMITTED");
+        readAs("deleted-entry-consumer");
+        redis.opsForStream().delete(STREAM, messageId);
+
+        consumer.recoverPendingMessages();
+
+        assertEquals(0, pendingCount());
+        assertEquals(1, deadLetterRecords().size());
+        Map<Object, Object> deadLetter = deadLetterRecords().get(0).getValue();
+        assertEquals(messageId.getValue(), deadLetter.get("sourceMessageId"));
+        assertTrue(((String) deadLetter.get("failureReason"))
+                .contains("original payload unavailable"));
+    }
+
+    @Test
+    void consumerRecreatesGroupAfterRedisGroupDisappears() {
+        long organizationId = createOrganization();
+        String firstId = nextEventId();
+        addEvent(firstId, organizationId, "EVALUATION_SUBMITTED");
+        consumer.pollNewMessages();
+        assertInbox(firstId, InboxEventStatus.PROCESSED, 1);
+
+        redis.opsForStream().destroyGroup(STREAM, GROUP);
+        String secondId = nextEventId();
+        addEvent(secondId, organizationId, "QUEUE_ENTRY_REGISTERED");
+        consumer.pollNewMessages();
+        consumer.pollNewMessages();
+        consumer.pollNewMessages();
+
+        assertInbox(firstId, InboxEventStatus.PROCESSED, 1);
+        assertInbox(secondId, InboxEventStatus.PROCESSED, 1);
+        assertEquals(0, pendingCount());
+    }
+
+    @Test
     void failedAckAfterCommitIsHarmlessWhenGroupRestarts() {
         long organizationId = createOrganization();
         String eventId = nextEventId();
@@ -298,19 +337,23 @@ class OutboxConsumerPostgresRedisTest {
         processing.process(deserializer.deserialize(abandoned), 1);
 
         redis.opsForStream().destroyGroup(STREAM, GROUP);
-        consumer.pollNewMessages();
+        new RedisStreamConsumer(redis, properties, deserializer, processing,
+                failures, deadLetterPublisher).pollNewMessages();
 
         assertInbox(eventId, InboxEventStatus.PROCESSED, 1);
         assertEquals(0, pendingCount());
     }
 
-    private com.queueguard.qms.service.InboxEventFailureService failures() {
-        return org.springframework.test.util.ReflectionTestUtils.getField(
-                consumer, "failures",
-                com.queueguard.qms.service.InboxEventFailureService.class);
-    }
-
     private MapRecord<String, Object, Object> readAs(String consumerName) {
+        try {
+            redis.opsForStream().createGroup(
+                    STREAM, ReadOffset.from("0-0"), GROUP);
+        } catch (org.springframework.dao.DataAccessException exception) {
+            if (exception.getMessage() == null
+                    || !exception.getMessage().contains("BUSYGROUP")) {
+                throw exception;
+            }
+        }
         var records = redis.opsForStream().read(
                 Consumer.from(GROUP, consumerName),
                 StreamReadOptions.empty().count(1),
@@ -320,7 +363,7 @@ class OutboxConsumerPostgresRedisTest {
         return records.get(0);
     }
 
-    private void addEvent(String eventId, long organizationId, String eventType) {
+    private RecordId addEvent(String eventId, long organizationId, String eventType) {
         Map<String, String> fields = new LinkedHashMap<>();
         fields.put("eventId", eventId);
         fields.put("eventType", eventType);
@@ -331,7 +374,7 @@ class OutboxConsumerPostgresRedisTest {
                 + ",\"evaluationId\":" + eventId + "}");
         fields.put("createdAt", Instant.now().toString());
         fields.put("idempotencyKey", "test:" + organizationId + ":" + eventId);
-        redis.opsForStream().add(STREAM, fields);
+        return redis.opsForStream().add(STREAM, fields);
     }
 
     private long createOrganization() {
