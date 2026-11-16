@@ -170,6 +170,7 @@ services:
       <<: *common-env
       DB_NAME: qms_db
       SERVER_PORT: "8086"
+      OUTBOX_CONSUMER_ENABLED: "true"
     ports:
       - "8086:8086"
     depends_on:
