@@ -33,6 +33,21 @@ queueguard:
     initial-retry-delay-ms: ${OUTBOX_INITIAL_RETRY_DELAY_MS:1000}
     max-retry-delay-ms: ${OUTBOX_MAX_RETRY_DELAY_MS:300000}
     lease-duration-ms: ${OUTBOX_LEASE_DURATION_MS:300000}
+  consumer:
+    enabled: ${OUTBOX_CONSUMER_ENABLED:false}
+    stream-key: ${OUTBOX_STREAM_KEY:qg:qms:outbox}
+    group-name: ${OUTBOX_CONSUMER_GROUP:qg:qms:domain-events-v1}
+    consumer-name: ${OUTBOX_CONSUMER_NAME:qms-domain-events-v1}
+    consumer-identity: ${OUTBOX_CONSUMER_ID:${HOSTNAME:qms}}
+    batch-size: ${OUTBOX_CONSUMER_BATCH_SIZE:50}
+    blocking-timeout-ms: ${OUTBOX_CONSUMER_BLOCKING_TIMEOUT_MS:500}
+    polling-interval-ms: ${OUTBOX_CONSUMER_POLLING_INTERVAL_MS:1000}
+    pending-recovery-interval-ms: ${OUTBOX_PENDING_RECOVERY_INTERVAL_MS:5000}
+    minimum-pending-idle-ms: ${OUTBOX_PENDING_MIN_IDLE_MS:1000}
+    max-attempts: ${OUTBOX_CONSUMER_MAX_ATTEMPTS:5}
+    initial-retry-delay-ms: ${OUTBOX_CONSUMER_INITIAL_RETRY_DELAY_MS:1000}
+    max-retry-delay-ms: ${OUTBOX_CONSUMER_MAX_RETRY_DELAY_MS:300000}
+    dead-letter-stream-key: ${OUTBOX_DEAD_LETTER_STREAM_KEY:qg:qms:outbox:dead-letter}
 management:
   endpoints:
     web:
