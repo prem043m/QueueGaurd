@@ -14,6 +14,7 @@ import jakarta.persistence.LockModeType;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.Collection;
 
 /**
  * Repository for QueueEntry entities with custom queries for queue operations.
@@ -151,4 +152,24 @@ public interface QueueEntryRepository extends JpaRepository<QueueEntry, Long> {
             @Param("queueConfigId") Long queueConfigId,
             @Param("queueCode") String queueCode,
             @Param("datePart") String datePart);
+
+    @Query(value = """
+            select count(*) from queue_entries
+            where organization_id = :organizationId
+              and (:fromAt is null or joined_at >= :fromAt)
+              and (:toAt is null or joined_at < :toAt)
+            """, nativeQuery = true)
+    long countForAnalytics(@Param("organizationId") Long organizationId,
+            @Param("fromAt") Instant fromAt, @Param("toAt") Instant toAt);
+
+    @Query(value = """
+            select status as status, count(*) as count from queue_entries
+            where organization_id = :organizationId
+              and (:fromAt is null or joined_at >= :fromAt)
+              and (:toAt is null or joined_at < :toAt)
+            group by status order by status
+            """, nativeQuery = true)
+    Collection<StatusCount> countStatusesForAnalytics(
+            @Param("organizationId") Long organizationId,
+            @Param("fromAt") Instant fromAt, @Param("toAt") Instant toAt);
 }

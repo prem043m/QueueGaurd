@@ -52,4 +52,38 @@ public interface InterviewerAssignmentRepository
             findByOrganizationIdAndInterviewRoundIdAndInterviewerUserIdAndPanelName(
                     Long organizationId, Long interviewRoundId,
                     Long interviewerUserId, String panelName);
+
+    @Query(value = """
+                    select ia.interviewer_user_id as "interviewerUserId",
+                           count(distinct ia.id) as "activeAssignmentCount",
+                           count(distinct cr.id) as "assignedCandidateCount",
+                           count(distinct cr.id) filter (
+                               where ie.id is not null) as "completedEvaluationCount",
+                           count(distinct cr.id) filter (
+                               where cr.id is not null and ie.id is null) as "pendingEvaluationCount"
+                    from interviewer_assignments ia
+                    join interview_rounds r
+                      on r.organization_id = ia.organization_id
+                     and r.id = ia.interview_round_id
+                    left join candidate_rounds cr
+                      on cr.organization_id = ia.organization_id
+                     and cr.interview_round_id = ia.interview_round_id
+                     and cr.placement_drive_id = r.placement_drive_id
+                    left join interview_evaluations ie
+                      on ie.organization_id = cr.organization_id
+                     and ie.candidate_round_id = cr.id
+                     and ie.interviewer_user_id = ia.interviewer_user_id
+                    where ia.organization_id = :organizationId
+                      and ia.status in ('ASSIGNED', 'ACTIVE')
+                      and (:driveId is null or r.placement_drive_id = :driveId)
+                      and (:roundId is null or ia.interview_round_id = :roundId)
+                      and (:interviewerId is null or ia.interviewer_user_id = :interviewerId)
+                    group by ia.interviewer_user_id
+                    order by ia.interviewer_user_id
+                    """, nativeQuery = true)
+    List<InterviewerWorkloadRow> findWorkload(
+                    @Param("organizationId") Long organizationId,
+                    @Param("driveId") Long driveId,
+                    @Param("roundId") Long roundId,
+                    @Param("interviewerId") Long interviewerId);
 }

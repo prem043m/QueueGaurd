@@ -6,11 +6,31 @@
 
 ## Abstract
 
-Modern cloud applications must process huge volumes of background work — notifications, payments, media processing, order fulfilment — across thousands of concurrent users, while staying available under infrastructure faults and deliberately hostile traffic. This project, **QueueGuard**, addresses both problems at once. It is a distributed queue management platform built entirely on a **microservices architecture** (Java 17, Spring Boot 3, PostgreSQL, Redis, Kubernetes) in which six independently deployable services — *API Gateway*, *Auth*, *Queue*, *Worker*, *Rate-Limit* and *Monitor* — cooperate to provide durable priority-based message queuing, strictly bounded worker concurrency, and an **adaptive, IP-aware rate limiting subsystem** that throttles and bans abusive clients within seconds while legitimate multi-user traffic continues to be served.
+Modern cloud applications must process huge volumes of background work — notifications, payments, media processing, order fulfilment — across thousands of concurrent users, while staying available under infrastructure faults and deliberately hostile traffic. This project, **QueueGuard**, addresses both problems at once. It is a distributed queue management platform built entirely on a **microservices architecture** (Java 17, Spring Boot 3, PostgreSQL, Redis, Kubernetes). Its seven independently deployable application services — *API Gateway*, *Auth*, *Queue*, *Worker*, *Rate-Limit*, *Monitor* and *Queue Management* — provide durable priority-based message queuing, strictly bounded worker concurrency, tenant-scoped interview and placement workflows, transactional event delivery and an **adaptive, IP-aware rate limiting subsystem**.
 
 Every service owns a private database (database-per-service pattern), so a failure or an attack against one component can never corrupt another. Messages are claimed atomically (Redis `ZPOPMIN` + guarded SQL updates), processed under semaphore-bounded concurrency, retried with exponential backoff, and dead-lettered after exhaustion. A monitor service computes a live load score and feeds it back into the rate limiter, which scales every client IP's allowance up to 1.5× when idle and down to 0.2× under pressure. Evaluation with a simulated single-IP flood shows that 100% of abusive requests are throttled (HTTP 429) or banned, while concurrent multi-user workloads complete unaffected. The system is packaged with Docker Composes for local use and production-style Kubernetes manifests (probes, HPA, PodDisruptionBudgets, NetworkPolicies, Secrets) for deployment on Minikube or any cluster.
 
 **Keywords:** distributed queue, microservices, rate limiting, token bucket, concurrency control, fault tolerance, dead-letter queue, Kubernetes, Spring Boot, Redis.
+
+---
+
+## Implementation Status
+
+**Current status: The original infrastructure platform and the interview-management implementation through Phase 3.9 are implemented.**
+
+| Area | Status | Evidence |
+|---|---|---|
+| Original six infrastructure microservices | Implemented | API gateway, auth, queue, worker, rate-limit and monitor services |
+| Queue management microservice | Implemented | Tenant, organization, membership, business queue and interview domain |
+| PostgreSQL and Redis persistence | Implemented | Flyway migrations V1-V8, JPA repositories and Redis ready/outbox streams |
+| Phase 3.1-3.5 interview lifecycle | Implemented and verified | Drives, profiles, applications, rounds, assignments and candidate rounds |
+| Phase 3.6 evaluation outbox integration | Implemented | Immutable evaluation submission creates `EVALUATION_SUBMITTED` |
+| Phase 3.7 Redis outbox publisher | Implemented and verified | Claim/lease lifecycle, retry, recovery and Redis Stream publication |
+| Phase 3.8 Redis consumer and inbox | Implemented and verified | Consumer groups, pending recovery, retry, deduplication and dead letters |
+| Phase 3.9 analytics | Implemented | Organization, drive, funnel, department, interviewer workload and round progression |
+| Docker Compose and Kubernetes | Implemented | Seven application services plus PostgreSQL and Redis |
+
+Targeted verification of the Phase 3.9 analytics additions passed 33 tests with zero failures.
 
 ---
 
@@ -80,7 +100,7 @@ Background job processing in multi-user web applications is deceptively hard:
                          +---------------------------------------------------------------------+
 ```
 
-**Request flow (typical):** client → *api-gateway* (request-id, client-IP, security headers) → *rate-limit-service* decision (allow / 429 / ban) → JWT validation → circuit-breaker-protected proxy call to the owning microservice → response with `X-RateLimit-*` headers. Producers enqueue via *queue-service*; *worker-service* pods concurrently claim and process; *monitor-service* probes everything, computes a load score and closes the adaptive loop into *rate-limit-service*.
+**Request flow (typical):** client → *api-gateway* (request-id, client-IP, security headers) → *rate-limit-service* decision (allow / 429 / ban) → JWT validation → circuit-breaker-protected proxy call to the owning microservice → response with `X-RateLimit-*` headers. Producers enqueue via *queue-service*; *worker-service* pods concurrently claim and process; *monitor-service* probes infrastructure health and closes the adaptive loop into *rate-limit-service*; *queue-management-service* owns tenant, interview and placement state and publishes domain events to Redis Streams.
 
 ---
 
@@ -90,7 +110,7 @@ Background job processing in multi-user web applications is deceptively hard:
 
 | Criterion | **Monolith** (one Spring Boot app) | **Hybrid** (monolith + separate workers) | **Microservices** (chosen) |
 |---|---|---|---|
-| Build & deploy simplicity | ★★★ Single artifact | ★★ Two artifacts | ★ Six artifacts + infra (tooling mitigates) |
+| Build & deploy simplicity | ★★★ Single artifact | ★★ Two artifacts | ★ Seven application artifacts + infra (tooling mitigates) |
 | Fault isolation | ★ One crash takes down auth+queue+API | ★★ Worker isolated; core still single | ★★★ One service failing ≠ system failing |
 | Independent scaling | ★ Scale everything together | ★★ Workers scale separately | ★★★ Gateway/queue/workers scale on their own signals |
 | Attack containment (our key requirement) | ★ An API flood starves the whole JVM incl. queue internals | ★★ Workers survive; core API still coupled | ★★★ Abuse hits the gateway tier; per-service bulkheads + per-IP limiter absorb it |
@@ -137,6 +157,7 @@ Hybrid — a single core service plus separate worker pods — is the common pra
 | **worker-service** | 8083 | Claims work, processes under semaphore-bounded concurrency, acks/nacks, records results | `worker_db` (job_results) | `GET /workers/stats`, `POST /workers/pause\|resume` |
 | **rate-limit-service** | 8084 | Distributed token buckets (Redis Lua), strikes, exponential IP bans, adaptive multiplier | `ratelimit_db` (ip_bans, adaptive_state) | `POST /ratelimit/check`, `POST /ratelimit/load`, `GET /ratelimit/bans`, `POST /ratelimit/ban/{ip}` |
 | **monitor-service** | 8085 | Health probing, metrics ingestion, load-score computation, adaptive feedback push, dashboard | `monitor_db` (health_checks, metric_samples, load_snapshots) | `GET /monitor/health-overview\|load\|timeline`, `POST /monitor/metrics` |
+| **queue-management-service** | 8086 | Organizations, membership and roles, business queues, placement drives, candidates, rounds, evaluations, analytics and event inbox/outbox | `qms_db` | `/api/v1/organizations/{orgId}/...` |
 
 Shared library `common`: uniform `ApiResponse` envelope, exception hierarchy + `@RestControllerAdvice`, **JWT (HS256)** implementation, **PBKDF2** password hashing. Each service is an independent Spring Boot fat JAR with its own Dockerfile stage and Kubernetes Deployment.
 
@@ -154,6 +175,7 @@ Every service owns exactly one PostgreSQL database; nothing else may touch its t
 | `ratelimit_db` | rate-limit-service | ip_bans (strikes, banned_until), adaptive_state (multiplier) |
 | `monitor_db` | monitor-service | health_checks, metric_samples, load_snapshots |
 | `gateway_db` | api-gateway | audit_log (denied/suspicious requests) |
+| `qms_db` | queue-management-service | organizations, memberships, queue and interview entities, applications, evaluations, outbox/inbox events |
 
 Redis holds only *ephemeral, high-velocity* state: the per-queue ready-sets (sorted sets) and the rate-limit token buckets (hashes updated by an atomic Lua script). PostgreSQL remains the durable source of truth; a background **reconciler** re-populates Redis from `PENDING` rows, so a Redis restart never loses messages.
 
@@ -303,6 +325,27 @@ Images are built by `scripts/build-images.sh` (shared multi-stage `deploy/Docker
 
 ## 14. Testing & Evaluation
 
+### 14.0 Implementation verification
+
+Verified milestones include:
+
+- Phase 2 business queue fixes, tenant authorization and PostgreSQL concurrency protection.
+- Phase 3.1-3.5 tenant/interview persistence, API and candidate-round lifecycle.
+- Phase 3.6 immutable interview evaluations and transactional outbox integration.
+- Phase 3.7 Redis Stream publication, leases, retries, recovery and at-least-once delivery.
+- Phase 3.8 consumer groups, inbox deduplication, pending recovery, retries and dead letters.
+- Phase 3.9 organization, drive, funnel, department, workload and round-progression analytics.
+
+Recent targeted Phase 3.9 verification:
+
+```bash
+mvn --batch-mode --no-transfer-progress \
+  "-Dtest=AnalyticsServiceTest,Phase3PersistencePostgresTest" \
+  "-Dsurefire.failIfNoSpecifiedTests=false" test
+```
+
+Result: **33 tests, 0 failures, 0 errors, 0 skipped**. This included 18 `AnalyticsServiceTest` cases and 15 `Phase3PersistencePostgresTest` cases against PostgreSQL Testcontainers. The earlier full Phase 3.8 verification reported 155 tests across QMS, Queue Service and Common, with PostgreSQL 15.20 and Redis 7 Testcontainers.
+
 ### 14.1 Multi-user load test (`scripts/load_test.py`)
 N concurrent users register, log in, and enqueue/poll at human cadence. Expected: all requests 2xx; zero 429s; workers drain the queue; dashboard shows healthy load.
 
@@ -337,7 +380,8 @@ queueguard/
 │   ├── queue-service/          # 8082 - distributed queue         -> queue_db + Redis
 │   ├── worker-service/         # 8083 - concurrency-controlled consumer -> worker_db
 │   ├── rate-limit-service/     # 8084 - adaptive token buckets    -> ratelimit_db + Redis
-│   └── monitor-service/        # 8085 - health, load score, dashboard -> monitor_db
+│   ├── monitor-service/        # 8085 - health, load score, dashboard -> monitor_db
+│   └── queue-management-service/  # 8086 - tenants, interviews, events, analytics -> qms_db
 ├── deploy/                     # shared Dockerfile, db-init SQL
 ├── docker-compose.yml          # one-command local stack
 ├── k8s/                        # full Kubernetes manifests
@@ -351,15 +395,18 @@ queueguard/
 
 ## 16. Limitations & Future Enhancements
 
-- **Exactly-once delivery** is not provided (at-least-once + idempotency is the standard trade-off). A transactional outbox would tighten this.
+- **Exactly-once delivery** is not provided. QMS uses at-least-once Redis publication with PostgreSQL inbox deduplication.
+- **Downstream business consumers** remain limited to inbox support for the queue event set and `EVALUATION_SUBMITTED`; notifications and integrations are follow-up work.
+- **Dead-letter replay** has durable tombstones and failure metadata but not yet a complete administrative replay API.
 - **Redis is a single instance** here; production would use Redis Sentinel/Cluster.
 - **JWT secret rotation** and refresh tokens are future work.
 - **Custom-metric autoscaling** (queue depth via Prometheus adapter) would scale workers faster than CPU.
 - **Distributed tracing** (OpenTelemetry) would complement the monitor for deep debugging.
 - **Geo-distributed queues** (per-region ready-sets with global balancer) for multi-region deployments.
+- **Analytics are API-only**; the frontend dashboard and advanced reporting UI remain future work.
 
 ---
 
 ## 17. Conclusion
 
-QueueGuard delivers a complete, defensible answer to the brief: a **microservices** distributed queue platform in which every service owns its database, every message is processed under strict concurrency control, and every client IP is governed by an **adaptive** rate limiter that throttles floods within seconds, escalates to exponential bans, and — when the system is under pressure — automatically tightens itself while keeping legitimate multi-user traffic flowing. The architecture is justified against monolithic and hybrid alternatives by the project's own requirements: independent scaling under attack, blast-radius isolation, and per-service hardening — with Kubernetes making that architecture operable and demonstrable on a laptop with Minikube. Under simulated attack, the single offender is stopped at the perimeter; the queue keeps flowing; the dashboard keeps breathing. That is exactly the behaviour an intelligent, fault-tolerant queue management system should exhibit.
+QueueGuard now provides both the original fault-tolerant infrastructure queue and a tenant-scoped placement/interview management domain. The seven-microservice architecture has authentication, atomic queue delivery, bounded workers, adaptive rate limiting, monitoring, organization membership and roles, placement drives, interview workflows, immutable evaluations, transactional outbox/inbox delivery and tenant analytics. Flyway migrations V1-V8, Docker Compose, Kubernetes manifests and PostgreSQL/Redis Testcontainers verification support the implementation. Remaining work is mainly downstream business consumers, replay/reporting UX, frontend integration and production hardening rather than the core Phase 3 domain, event and analytics layers.
