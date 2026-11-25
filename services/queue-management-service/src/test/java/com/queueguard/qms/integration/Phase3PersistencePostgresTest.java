@@ -62,7 +62,7 @@ class Phase3PersistencePostgresTest {
 
     @Test
     void flywayRunsAllMigrationsAndCreatesPhase3Schema() {
-        assertEquals(8, jdbc.queryForObject(
+        assertEquals(9, jdbc.queryForObject(
                 "select count(*) from flyway_schema_history where success", Integer.class));
         for (String table : List.of("placement_drives", "candidate_profiles",
                 "candidate_applications", "interview_rounds", "interviewer_assignments",
@@ -82,7 +82,8 @@ class Phase3PersistencePostgresTest {
                         + "and indexname = 'idx_outbox_aggregate_delivery_order'",
                 Integer.class));
         for (String column : List.of(
-                "next_attempt_at", "claimed_at", "claim_token", "updated_at")) {
+                "next_attempt_at", "claimed_at", "claim_token", "updated_at",
+                "traceparent", "tracestate")) {
             assertEquals(1, jdbc.queryForObject(
                     "select count(*) from information_schema.columns "
                             + "where table_schema = current_schema() "

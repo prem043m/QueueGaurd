@@ -52,6 +52,9 @@ class QueueAuthorizationTest {
     
     @Mock
     private TokenGenerator tokenGenerator;
+
+    @Mock
+    private OutboxTraceContext outboxTraceContext;
     
     @InjectMocks
     private QueueService queueService;
