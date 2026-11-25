@@ -13,4 +13,21 @@ public record ClaimedOutboxEvent(
         Instant createdAt,
         String idempotencyKey,
         UUID claimToken,
-        int attemptNumber) {}
+        int attemptNumber,
+        String traceparent,
+        String tracestate) {
+    public ClaimedOutboxEvent(
+            Long id,
+            Long organizationId,
+            String aggregateType,
+            Long aggregateId,
+            String eventType,
+            String payload,
+            Instant createdAt,
+            String idempotencyKey,
+            UUID claimToken,
+            int attemptNumber) {
+        this(id, organizationId, aggregateType, aggregateId, eventType, payload,
+                createdAt, idempotencyKey, claimToken, attemptNumber, null, null);
+    }
+}

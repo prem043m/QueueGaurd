@@ -36,6 +36,7 @@ public class InterviewEvaluationService {
     private final OutboxEventRepository outboxEventRepository;
     private final Phase3Access access;
     private final ObjectMapper objectMapper;
+    private final OutboxTraceContext outboxTraceContext;
 
     public InterviewEvaluationService(
             CandidateRoundRepository candidateRoundRepository,
@@ -43,13 +44,15 @@ public class InterviewEvaluationService {
             InterviewerAssignmentRepository assignmentRepository,
             OutboxEventRepository outboxEventRepository,
             Phase3Access access,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            OutboxTraceContext outboxTraceContext) {
         this.candidateRoundRepository = candidateRoundRepository;
         this.evaluationRepository = evaluationRepository;
         this.assignmentRepository = assignmentRepository;
         this.outboxEventRepository = outboxEventRepository;
         this.access = access;
         this.objectMapper = objectMapper;
+        this.outboxTraceContext = outboxTraceContext;
     }
 
     @Transactional
@@ -136,6 +139,7 @@ public class InterviewEvaluationService {
         event.setProcessingStatus(OutboxEventStatus.PENDING);
         event.setIdempotencyKey("evaluation-submitted:"
                 + evaluation.getOrganizationId() + ":" + evaluation.getId());
+        outboxTraceContext.capture(event);
         outboxEventRepository.saveAndFlush(event);
     }
 

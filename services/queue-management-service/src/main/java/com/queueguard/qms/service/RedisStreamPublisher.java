@@ -31,6 +31,12 @@ public class RedisStreamPublisher {
         if (event.idempotencyKey() != null) {
             fields.put("idempotencyKey", event.idempotencyKey());
         }
+        if (event.traceparent() != null) {
+            fields.put("traceparent", event.traceparent());
+        }
+        if (event.tracestate() != null) {
+            fields.put("tracestate", event.tracestate());
+        }
 
         MapRecord<String, String, String> record = StreamRecords.newRecord()
                 .in(properties.streamKey())

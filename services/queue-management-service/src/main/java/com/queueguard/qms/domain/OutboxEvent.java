@@ -60,6 +60,12 @@ public class OutboxEvent {
     
     @Column(name = "idempotency_key", length = 100)
     private String idempotencyKey;
+
+    @Column(name = "traceparent", length = 55)
+    private String traceparent;
+
+    @Column(name = "tracestate", length = 512)
+    private String tracestate;
     
     @Version
     @Column(name = "version", nullable = false)
@@ -193,6 +199,22 @@ public class OutboxEvent {
     
     public void setIdempotencyKey(String idempotencyKey) {
         this.idempotencyKey = idempotencyKey;
+    }
+
+    public String getTraceparent() {
+        return traceparent;
+    }
+
+    public void setTraceparent(String traceparent) {
+        this.traceparent = traceparent;
+    }
+
+    public String getTracestate() {
+        return tracestate;
+    }
+
+    public void setTracestate(String tracestate) {
+        this.tracestate = tracestate;
     }
     
     public Long getVersion() {

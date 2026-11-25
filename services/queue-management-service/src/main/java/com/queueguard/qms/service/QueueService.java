@@ -29,6 +29,7 @@ public class QueueService {
     private final OutboxEventRepository outboxEventRepo;
     private final TenantService tenantService;
     private final TokenGenerator tokenGenerator;
+    private final OutboxTraceContext outboxTraceContext;
     
     public QueueService(
             QueueConfigurationRepository queueConfigRepo,
@@ -37,7 +38,8 @@ public class QueueService {
             QueueEventRepository queueEventRepo,
             OutboxEventRepository outboxEventRepo,
             TenantService tenantService,
-            TokenGenerator tokenGenerator) {
+            TokenGenerator tokenGenerator,
+            OutboxTraceContext outboxTraceContext) {
         this.queueConfigRepo = queueConfigRepo;
         this.queueEntryRepo = queueEntryRepo;
         this.queueAssignmentRepo = queueAssignmentRepo;
@@ -45,6 +47,7 @@ public class QueueService {
         this.outboxEventRepo = outboxEventRepo;
         this.tenantService = tenantService;
         this.tokenGenerator = tokenGenerator;
+        this.outboxTraceContext = outboxTraceContext;
     }
     
     // ==================== Queue Configuration Operations ====================
@@ -976,6 +979,7 @@ public class QueueService {
         event.setPayload(serializePayload(payload));
         event.setProcessingStatus(OutboxEventStatus.PENDING);
         event.setIdempotencyKey(java.util.UUID.randomUUID().toString());
+        outboxTraceContext.capture(event);
         outboxEventRepo.save(event);
     }
     
