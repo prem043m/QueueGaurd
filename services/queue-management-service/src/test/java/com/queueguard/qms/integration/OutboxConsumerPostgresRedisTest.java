@@ -11,6 +11,12 @@ import com.queueguard.qms.service.ConsumerEventDeserializer;
 import com.queueguard.qms.service.InboxEventFailureService;
 import com.queueguard.qms.service.InboxEventProcessingService;
 import com.queueguard.qms.service.OutboxConsumerProperties;
+import com.queueguard.qms.service.OutboxEventLifecycleService;
+import com.queueguard.qms.service.OutboxPublisher;
+import com.queueguard.qms.service.QmsEventMetrics;
+import com.queueguard.qms.service.OutboxTraceContext;
+import com.queueguard.qms.service.RedisStreamPublisher;
+import io.micrometer.tracing.Tracer;
 import com.queueguard.qms.service.RedisDeadLetterPublisher;
 import com.queueguard.qms.service.RedisStreamConsumer;
 import java.time.Duration;
@@ -51,6 +57,7 @@ import org.testcontainers.utility.DockerImageName;
 
 @SpringBootTest(properties = {
         "queueguard.outbox.enabled=false",
+        "queueguard.outbox.stream-key=qg:test:qms:consumer-events",
         "queueguard.consumer.enabled=true",
         "queueguard.consumer.stream-key=qg:test:qms:consumer-events",
         "queueguard.consumer.group-name=qg:test:qms:consumer-group",
@@ -102,6 +109,13 @@ class OutboxConsumerPostgresRedisTest {
     @Autowired private ConsumerEventDeserializer deserializer;
     @Autowired private OutboxConsumerProperties properties;
     @Autowired private RedisDeadLetterPublisher deadLetterPublisher;
+    @Autowired private QmsEventMetrics metrics;
+    @Autowired private Tracer tracer;
+    @Autowired private OutboxTraceContext outboxTraceContext;
+    @Autowired private OutboxEventLifecycleService outboxLifecycle;
+    @Autowired private com.queueguard.qms.service.OutboxPublisherProperties outboxProperties;
+    @Autowired private RedisStreamPublisher streamPublisher;
+    @Autowired private com.queueguard.qms.repo.OutboxEventRepository outboxRepository;
     @Autowired private StringRedisTemplate redis;
     private RedisStreamConsumer consumer;
 
@@ -115,7 +129,8 @@ class OutboxConsumerPostgresRedisTest {
             redis.delete(dedupeKeys);
         }
         consumer = new RedisStreamConsumer(
-                redis, properties, deserializer, processing, failures, deadLetterPublisher);
+                redis, properties, deserializer, processing, failures, deadLetterPublisher,
+                metrics, tracer, outboxTraceContext);
     }
 
     @Test
@@ -128,6 +143,47 @@ class OutboxConsumerPostgresRedisTest {
 
         assertInbox(eventId, InboxEventStatus.PROCESSED, 1);
         assertEquals(0, pendingCount());
+    }
+
+    @Test
+    void publishesAndConsumesOutboxEventsWithAndWithoutTraceFields() {
+        assertEquals(STREAM, outboxProperties.streamKey());
+        long organizationId = createOrganization();
+        String tracedId = nextEventId();
+        String untracedId = nextEventId();
+        saveOutboxEvent(tracedId, organizationId,
+                "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+                "vendor=value");
+        saveOutboxEvent(untracedId, organizationId, null, null);
+
+        new OutboxPublisher(outboxLifecycle, streamPublisher, metrics, tracer).publishBatch();
+        assertEquals(2, outboxRepository.countByProcessingStatus(
+                com.queueguard.qms.domain.OutboxEventStatus.PUBLISHED));
+
+        MapRecord<String, Object, Object> tracedRecord = redis.opsForStream()
+                .range(STREAM, Range.unbounded()).stream()
+                .filter(record -> tracedId.equals(record.getValue().get("aggregateId")))
+                .findFirst().orElseThrow();
+        MapRecord<String, Object, Object> untracedRecord = redis.opsForStream()
+                .range(STREAM, Range.unbounded()).stream()
+                .filter(record -> untracedId.equals(record.getValue().get("aggregateId")))
+                .findFirst().orElseThrow();
+        assertEquals(
+                "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+                tracedRecord.getValue().get("traceparent"));
+        assertEquals("vendor=value", tracedRecord.getValue().get("tracestate"));
+        assertTrue(!untracedRecord.getValue().containsKey("traceparent"));
+        assertTrue(!untracedRecord.getValue().containsKey("tracestate"));
+
+        consumer.pollNewMessages();
+        consumer.pollNewMessages();
+
+        assertInbox(
+                String.valueOf(tracedRecord.getValue().get("eventId")),
+                InboxEventStatus.PROCESSED, 1);
+        assertInbox(
+                String.valueOf(untracedRecord.getValue().get("eventId")),
+                InboxEventStatus.PROCESSED, 1);
     }
 
     @Test
@@ -232,7 +288,7 @@ class OutboxConsumerPostgresRedisTest {
         addEvent(secondId, organizationId, "QUEUE_ENTRY_REGISTERED");
         RedisStreamConsumer secondConsumer = new RedisStreamConsumer(
                 redis, properties, deserializer, processing, failures,
-                deadLetterPublisher);
+                deadLetterPublisher, metrics, tracer, outboxTraceContext);
         // The second poller shares the logical group but gets a fresh Redis consumer identity.
         assertNotNull(secondConsumer);
 
@@ -266,7 +322,8 @@ class OutboxConsumerPostgresRedisTest {
         addEvent(eventId, organizationId, "EVALUATION_SUBMITTED");
         readAs("abandoned-consumer");
         RedisStreamConsumer secondConsumer = new RedisStreamConsumer(
-                redis, properties, deserializer, processing, failures, deadLetterPublisher);
+                redis, properties, deserializer, processing, failures, deadLetterPublisher,
+                metrics, tracer, outboxTraceContext);
 
         CountDownLatch start = new CountDownLatch(1);
         ExecutorService executor = Executors.newFixedThreadPool(2);
@@ -338,7 +395,8 @@ class OutboxConsumerPostgresRedisTest {
 
         redis.opsForStream().destroyGroup(STREAM, GROUP);
         new RedisStreamConsumer(redis, properties, deserializer, processing,
-                failures, deadLetterPublisher).pollNewMessages();
+                failures, deadLetterPublisher, metrics, tracer, outboxTraceContext)
+                .pollNewMessages();
 
         assertInbox(eventId, InboxEventStatus.PROCESSED, 1);
         assertEquals(0, pendingCount());
@@ -375,6 +433,21 @@ class OutboxConsumerPostgresRedisTest {
         fields.put("createdAt", Instant.now().toString());
         fields.put("idempotencyKey", "test:" + organizationId + ":" + eventId);
         return redis.opsForStream().add(STREAM, fields);
+    }
+
+    private void saveOutboxEvent(
+            String eventId, long organizationId, String traceparent, String tracestate) {
+        var event = new com.queueguard.qms.domain.OutboxEvent();
+        event.setOrganizationId(organizationId);
+        event.setAggregateType("InterviewEvaluation");
+        event.setAggregateId(Long.parseLong(eventId));
+        event.setEventType("EVALUATION_SUBMITTED");
+        event.setPayload("{\"organizationId\":" + organizationId
+                + ",\"evaluationId\":" + eventId + "}");
+        event.setIdempotencyKey("outbox-test:" + eventId);
+        event.setTraceparent(traceparent);
+        event.setTracestate(tracestate);
+        outboxRepository.saveAndFlush(event);
     }
 
     private long createOrganization() {

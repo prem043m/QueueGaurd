@@ -2,6 +2,8 @@ server:
   port: ${SERVER_PORT:8084}
 
 spring:
+  config:
+    import: classpath:queueguard-observability.yml
   application:
     name: rate-limit-service
   datasource:
@@ -28,12 +30,6 @@ queueguard:
     ban-base-minutes: ${RL_BAN_BASE_MINUTES:1}
     ban-max-minutes: ${RL_BAN_MAX_MINUTES:60}
     strike-decay-sec: ${RL_STRIKE_DECAY_SEC:60}
-
-management:
-  endpoints:
-    web:
-      exposure:
-        include: health,info,metrics
 
 logging:
   level:

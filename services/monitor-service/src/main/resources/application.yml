@@ -2,6 +2,8 @@ server:
   port: ${SERVER_PORT:8085}
 
 spring:
+  config:
+    import: classpath:queueguard-observability.yml
   application:
     name: monitor-service
   datasource:
@@ -19,12 +21,6 @@ queueguard:
   queue-url: ${QUEUE_SERVICE_URL:http://localhost:8082}
   probe-interval-ms: ${MONITOR_PROBE_INTERVAL_MS:10000}
   cleanup-interval-ms: ${MONITOR_CLEANUP_INTERVAL_MS:3600000}
-
-management:
-  endpoints:
-    web:
-      exposure:
-        include: health,info,metrics
 
 logging:
   level:

@@ -8,6 +8,9 @@ import com.queueguard.monitor.entity.MonitorEntities.MetricSample;
 import com.queueguard.monitor.repo.HealthCheckRepository;
 import com.queueguard.monitor.repo.LoadSnapshotRepository;
 import com.queueguard.monitor.repo.MetricSampleRepository;
+import com.queueguard.common.observability.TraceContextHttpClient;
+import io.micrometer.tracing.Tracer;
+import io.micrometer.tracing.propagation.Propagator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -53,18 +56,24 @@ public class MonitorService {
 
     private final String rateLimitUrl;
     private final String queueUrl;
+    private final Tracer tracer;
+    private final Propagator propagator;
 
     public MonitorService(HealthCheckRepository healthRepo,
                           MetricSampleRepository metricRepo,
                           LoadSnapshotRepository loadRepo,
                           @Value("${queueguard.targets}") String targetsCsv,
                           @Value("${queueguard.rate-limit-url:http://localhost:8084}") String rateLimitUrl,
-                          @Value("${queueguard.queue-url:http://localhost:8082}") String queueUrl) {
+                          @Value("${queueguard.queue-url:http://localhost:8082}") String queueUrl,
+                          Tracer tracer,
+                          Propagator propagator) {
         this.healthRepo = healthRepo;
         this.metricRepo = metricRepo;
         this.loadRepo = loadRepo;
         this.rateLimitUrl = trimSlash(rateLimitUrl);
         this.queueUrl = trimSlash(queueUrl);
+        this.tracer = tracer;
+        this.propagator = propagator;
         for (String pair : targetsCsv.split(",")) {
             // format: name=base-url, e.g. api-gateway=http://api-gateway:8080
             String[] nameAndUrl = pair.trim().split("=", 2);
@@ -113,11 +122,13 @@ public class MonitorService {
         String status = "DOWN";
         long latency;
         try {
-            HttpRequest req = HttpRequest.newBuilder()
+            HttpRequest.Builder request = HttpRequest.newBuilder()
                     .uri(URI.create(baseUrl + "/health"))
                     .timeout(Duration.ofSeconds(2))
-                    .GET().build();
-            HttpResponse<String> res = http.send(req, HttpResponse.BodyHandlers.ofString());
+                    .GET();
+            HttpResponse<String> res = TraceContextHttpClient.send(
+                    http, request, HttpResponse.BodyHandlers.ofString(),
+                    tracer, propagator, name);
             latency = System.currentTimeMillis() - start;
             status = res.statusCode() == 200 ? "UP" : "DOWN(" + res.statusCode() + ")";
         } catch (Exception e) {
@@ -143,13 +154,14 @@ public class MonitorService {
             String body = String.format(Locale.ROOT,
                     "{\"loadScore\":%.4f,\"queueDepth\":%d,\"inFlight\":%d,\"errorRate\":%.4f,\"p95LatencyMs\":%d}",
                     loadScore, queueDepth, inFlight, errorRate, p95);
-            HttpRequest req = HttpRequest.newBuilder()
+            HttpRequest.Builder request = HttpRequest.newBuilder()
                     .uri(URI.create(rateLimitUrl + "/ratelimit/load"))
                     .timeout(Duration.ofSeconds(3))
                     .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(body))
-                    .build();
-            http.send(req, HttpResponse.BodyHandlers.discarding());
+                    .POST(HttpRequest.BodyPublishers.ofString(body));
+            TraceContextHttpClient.send(
+                    http, request, HttpResponse.BodyHandlers.discarding(),
+                    tracer, propagator, "rate-limit-service");
         } catch (Exception e) {
             log.debug("Could not push load to rate-limit-service: {}", e.getMessage());
         }
@@ -157,11 +169,13 @@ public class MonitorService {
 
     private long fetchQueueDepth() {
         try {
-            HttpRequest req = HttpRequest.newBuilder()
+            HttpRequest.Builder request = HttpRequest.newBuilder()
                     .uri(URI.create(queueUrl + "/queues"))
                     .timeout(Duration.ofSeconds(3))
-                    .GET().build();
-            HttpResponse<String> res = http.send(req, HttpResponse.BodyHandlers.ofString());
+                    .GET();
+            HttpResponse<String> res = TraceContextHttpClient.send(
+                    http, request, HttpResponse.BodyHandlers.ofString(),
+                    tracer, propagator, "queue-service");
             if (res.statusCode() != 200) {
                 return 0;
             }

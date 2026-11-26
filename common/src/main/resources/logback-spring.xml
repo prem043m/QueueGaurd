@@ -1,0 +1,35 @@
+<configuration>
+  <springProperty scope="context" name="serviceName" source="spring.application.name" defaultValue="queueguard"/>
+  <property name="deploymentEnvironment" value="${DEPLOYMENT_ENV:-local}"/>
+  <property name="appVersion" value="${APP_VERSION:-1.0.0}"/>
+
+  <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder class="net.logstash.logback.encoder.LoggingEventCompositeJsonEncoder">
+      <providers>
+        <timestamp>
+          <fieldName>timestamp</fieldName>
+          <timeZone>UTC</timeZone>
+        </timestamp>
+        <logLevel>
+          <fieldName>level</fieldName>
+        </logLevel>
+        <loggerName>
+          <fieldName>logger</fieldName>
+        </loggerName>
+        <threadName>
+          <fieldName>thread</fieldName>
+        </threadName>
+        <message/>
+        <mdc/>
+        <pattern>
+          <pattern>{"service.name":"${serviceName}","deployment.environment":"${deploymentEnvironment}","service.version":"${appVersion}"}</pattern>
+        </pattern>
+        <stackTrace/>
+      </providers>
+    </encoder>
+  </appender>
+
+  <root level="INFO">
+    <appender-ref ref="CONSOLE"/>
+  </root>
+</configuration>

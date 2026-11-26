@@ -17,10 +17,21 @@ TOKEN=$(curl -s -X POST "$BASE/api/auth/login" -H 'Content-Type: application/jso
   -d "{\"email\":\"$EMAIL\",\"password\":\"$PASS\"}" | python3 -c 'import sys,json; print(json.load(sys.stdin)["data"]["token"])')
 echo "token: ${TOKEN:0:40}..."
 
-echo "== 4. create queue 'default' =="
-curl -s -X POST "$BASE/api/queues" -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"default","description":"demo","maxConcurrency":16,"maxAttempts":5}'; echo
+echo "== 4. ensure queue 'default' exists =="
+QUEUE_STATUS=$(curl -sS -o /dev/null -w '%{http_code}' "$BASE/api/queues/default/stats" \
+  -H "Authorization: Bearer $TOKEN")
+if [[ "$QUEUE_STATUS" == "404" ]]; then
+  CREATE_STATUS=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$BASE/api/queues" \
+    -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+    -d '{"name":"default","description":"demo","maxConcurrency":16,"maxAttempts":5}')
+  if [[ "$CREATE_STATUS" != "200" && "$CREATE_STATUS" != "409" ]]; then
+    echo "Could not create queue 'default' (HTTP $CREATE_STATUS)" >&2
+    exit 1
+  fi
+elif [[ "$QUEUE_STATUS" != "200" ]]; then
+  echo "Could not inspect queue 'default' (HTTP $QUEUE_STATUS)" >&2
+  exit 1
+fi
 
 echo "== 5. enqueue 3 messages (one with fail:true to show retry/DLQ) =="
 for i in 1 2 3; do

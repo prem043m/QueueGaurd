@@ -3,6 +3,8 @@ package com.queueguard.qms.service;
 import static org.mockito.Mockito.*;
 
 import com.queueguard.qms.service.OutboxEventLifecycleService.FailureDisposition;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import io.micrometer.tracing.Tracer;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -15,8 +17,9 @@ class OutboxPublisherTest {
     private final OutboxEventLifecycleService lifecycle =
             mock(OutboxEventLifecycleService.class);
     private final RedisStreamPublisher streamPublisher = mock(RedisStreamPublisher.class);
+    private final QmsEventMetrics metrics = new QmsEventMetrics(new SimpleMeterRegistry());
     private final OutboxPublisher publisher =
-            new OutboxPublisher(lifecycle, streamPublisher);
+            new OutboxPublisher(lifecycle, streamPublisher, metrics, Tracer.NOOP);
 
     @Test
     void retriesRedisFailuresAndContinuesWithTheRestOfTheClaimedBatch() {

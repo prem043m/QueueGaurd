@@ -1,0 +1,43 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: queueguard-api-gateway
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["api-gateway:9090"]
+
+  - job_name: queueguard-auth-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["auth-service:9090"]
+
+  - job_name: queueguard-queue-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["queue-service:9090"]
+
+  - job_name: queueguard-worker-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["worker-service:9090"]
+
+  - job_name: queueguard-rate-limit-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["rate-limit-service:9090"]
+
+  - job_name: queueguard-monitor-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["monitor-service:9090"]
+
+  - job_name: queueguard-queue-management-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["queue-management-service:9090"]

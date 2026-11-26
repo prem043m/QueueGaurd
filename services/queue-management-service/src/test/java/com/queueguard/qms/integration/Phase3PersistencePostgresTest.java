@@ -6,6 +6,7 @@ import com.queueguard.qms.domain.ApplicationStatus;
 import com.queueguard.qms.domain.CandidateApplication;
 import com.queueguard.qms.domain.PlacementDrive;
 import com.queueguard.qms.repo.CandidateApplicationRepository;
+import com.queueguard.qms.repo.DepartmentAnalyticsRow;
 import com.queueguard.qms.repo.PlacementDriveRepository;
 import java.sql.SQLException;
 import java.sql.Timestamp;
@@ -61,7 +62,7 @@ class Phase3PersistencePostgresTest {
 
     @Test
     void flywayRunsAllMigrationsAndCreatesPhase3Schema() {
-        assertEquals(8, jdbc.queryForObject(
+        assertEquals(9, jdbc.queryForObject(
                 "select count(*) from flyway_schema_history where success", Integer.class));
         for (String table : List.of("placement_drives", "candidate_profiles",
                 "candidate_applications", "interview_rounds", "interviewer_assignments",
@@ -81,7 +82,8 @@ class Phase3PersistencePostgresTest {
                         + "and indexname = 'idx_outbox_aggregate_delivery_order'",
                 Integer.class));
         for (String column : List.of(
-                "next_attempt_at", "claimed_at", "claim_token", "updated_at")) {
+                "next_attempt_at", "claimed_at", "claim_token", "updated_at",
+                "traceparent", "tracestate")) {
             assertEquals(1, jdbc.queryForObject(
                     "select count(*) from information_schema.columns "
                             + "where table_schema = current_schema() "
@@ -415,6 +417,174 @@ class Phase3PersistencePostgresTest {
         assertEquals(0, jdbc.queryForObject(
                 "select count(*) from candidate_rounds where organization_id = ?",
                 Integer.class, fixture.organizationId()));
+    }
+
+    @Test
+    void departmentAnalyticsNativeProjectionAggregatesRoundsAndNormalizesDepartment() {
+        Fixture fixture = fixture(3);
+        Instant appliedAt = Instant.parse("2026-01-10T00:00:00Z");
+        jdbc.update("update candidate_profiles set department = ? where id = ?",
+                "   ", fixture.profileId());
+        jdbc.update("update candidate_applications set applied_at = ? where id = ?",
+                Timestamp.from(appliedAt), fixture.applicationId());
+        long candidateRoundId = insertCandidateRound(
+                fixture, fixture.applicationId(), fixture.queueEntryId());
+        jdbc.update("update candidate_rounds set result = 'SELECTED' where id = ?",
+                candidateRoundId);
+
+        List<DepartmentAnalyticsRow> rows = applicationRepository.findDepartmentAnalytics(
+                fixture.organizationId(),
+                appliedAt,
+                Instant.parse("2026-01-11T00:00:00Z"));
+
+        assertEquals(1, rows.size());
+        DepartmentAnalyticsRow row = rows.get(0);
+        assertEquals("Unspecified", row.getDepartment());
+        assertEquals(1L, row.getTotalCandidates());
+        assertEquals(1L, row.getTotalApplications());
+        assertEquals(1L, row.getSubmitted());
+        assertEquals(0L, row.getAccepted());
+        assertEquals(1L, row.getInterviewRegistered());
+        assertEquals(0L, row.getQualified());
+        assertEquals(1L, row.getSelected());
+        assertEquals(0, applicationRepository.findDepartmentAnalytics(
+                fixture.organizationId(),
+                Instant.parse("2026-01-11T00:00:00Z"),
+                null).size());
+    }
+
+    @Test
+    void departmentAnalyticsCountsMultipleRoundsAndOutcomeMetricsDistinctly() {
+        Fixture fixture = fixture(5);
+        jdbc.update("update candidate_profiles set department = ? where id = ?",
+                "Analytics", fixture.profileId());
+
+        long firstRound = insertCandidateRound(
+                fixture, fixture.applicationId(), fixture.queueEntryId());
+        long secondRoundId = insertRound(fixture, 2);
+        long secondQueueEntry = insertQueueEntry(fixture, "SECOND-TOKEN");
+        long secondRound = insertCandidateRoundWithRefs(
+                fixture, fixture.applicationId(), secondRoundId, fixture.driveId(),
+                fixture.queueConfigurationId(), secondQueueEntry);
+        jdbc.update("update candidate_rounds set result = 'QUALIFIED' where id = ?",
+                firstRound);
+        jdbc.update("update candidate_rounds set result = 'SELECTED' where id = ?",
+                secondRound);
+
+        long disqualifiedProfileOwner = insertMembership(fixture.organizationId());
+        long disqualifiedProfile = insertProfile(
+                fixture.organizationId(), disqualifiedProfileOwner);
+        long disqualifiedApplication = insertApplication(
+                fixture.organizationId(), fixture.driveId(), 2, disqualifiedProfile,
+                disqualifiedProfileOwner, "PENDING", "SUBMITTED", null);
+        jdbc.update("update candidate_profiles set department = 'Analytics' where id = ?",
+                disqualifiedProfile);
+        long disqualifiedRound = insertCandidateRound(
+                fixture, disqualifiedApplication,
+                insertQueueEntry(fixture, "DISQUALIFIED-TOKEN"));
+        jdbc.update("update candidate_rounds set result = 'DISQUALIFIED' where id = ?",
+                disqualifiedRound);
+
+        long holdProfileOwner = insertMembership(fixture.organizationId());
+        long holdProfile = insertProfile(fixture.organizationId(), holdProfileOwner);
+        long holdApplication = insertApplication(
+                fixture.organizationId(), fixture.driveId(), 3, holdProfile,
+                holdProfileOwner, "PENDING", "SUBMITTED", null);
+        jdbc.update("update candidate_profiles set department = 'Analytics' where id = ?",
+                holdProfile);
+        long holdRound = insertCandidateRound(
+                fixture, holdApplication, insertQueueEntry(fixture, "HOLD-TOKEN"));
+        jdbc.update("update candidate_rounds set result = 'HOLD' where id = ?",
+                holdRound);
+
+        List<DepartmentAnalyticsRow> rows =
+                applicationRepository.findDepartmentAnalytics(
+                        fixture.organizationId(), null, null);
+
+        assertEquals(1, rows.size());
+        DepartmentAnalyticsRow row = rows.get(0);
+        assertEquals("Analytics", row.getDepartment());
+        assertEquals(3L, row.getTotalCandidates());
+        assertEquals(3L, row.getTotalApplications());
+        assertEquals(3L, row.getSubmitted());
+        assertEquals(3L, row.getInterviewRegistered());
+        assertEquals(1L, row.getQualified());
+        assertEquals(1L, row.getSelected());
+    }
+
+    @Test
+    void departmentAnalyticsPreservesNonblankDepartmentExactly() {
+        Fixture fixture = fixture(3);
+        String department = " cSe ";
+        jdbc.update("update candidate_profiles set department = ? where id = ?",
+                department, fixture.profileId());
+
+        List<DepartmentAnalyticsRow> rows =
+                applicationRepository.findDepartmentAnalytics(
+                        fixture.organizationId(), null, null);
+
+        assertEquals(1, rows.size());
+        assertEquals(department, rows.get(0).getDepartment());
+    }
+
+    @Test
+    void departmentAnalyticsUsesInclusiveFromExclusiveToAndIgnoresRoundTimestamp() {
+        Fixture fixture = fixture(4);
+        Instant from = Instant.parse("2026-02-01T00:00:00Z");
+        Instant to = Instant.parse("2026-02-02T00:00:00Z");
+        jdbc.update("update candidate_applications set applied_at = ? where id = ?",
+                Timestamp.from(from), fixture.applicationId());
+        long round = insertCandidateRound(
+                fixture, fixture.applicationId(), fixture.queueEntryId());
+        jdbc.update("""
+                update candidate_rounds
+                set result = 'SELECTED', created_at = ?, updated_at = ?
+                where id = ?
+                """, Timestamp.from(to.plusSeconds(86400)),
+                Timestamp.from(to.plusSeconds(86400)), round);
+
+        long otherOwner = insertMembership(fixture.organizationId());
+        long otherProfile = insertProfile(fixture.organizationId(), otherOwner);
+        long otherApplication = insertApplication(
+                fixture.organizationId(), fixture.driveId(), 2, otherProfile,
+                otherOwner, "PENDING", "SUBMITTED", null);
+        jdbc.update("update candidate_applications set applied_at = ? where id = ?",
+                Timestamp.from(to), otherApplication);
+
+        List<DepartmentAnalyticsRow> inside =
+                applicationRepository.findDepartmentAnalytics(
+                        fixture.organizationId(), from, to);
+        assertEquals(1, inside.size());
+        assertEquals(1L, inside.get(0).getTotalApplications());
+        assertEquals(1L, inside.get(0).getSelected());
+
+        assertEquals(0, applicationRepository.findDepartmentAnalytics(
+                fixture.organizationId(), null, from).size());
+        List<DepartmentAnalyticsRow> upperBoundary =
+                applicationRepository.findDepartmentAnalytics(
+                        fixture.organizationId(), to, null);
+        assertEquals(1, upperBoundary.size());
+        assertEquals(1L, upperBoundary.get(0).getTotalApplications());
+    }
+
+    @Test
+    void departmentAnalyticsIsolatesOrganizations() {
+        Fixture first = fixture(3);
+        Fixture second = fixture(3);
+        jdbc.update("update candidate_profiles set department = 'Shared' where id in (?, ?)",
+                first.profileId(), second.profileId());
+
+        List<DepartmentAnalyticsRow> firstRows =
+                applicationRepository.findDepartmentAnalytics(
+                        first.organizationId(), null, null);
+        List<DepartmentAnalyticsRow> secondRows =
+                applicationRepository.findDepartmentAnalytics(
+                        second.organizationId(), null, null);
+
+        assertEquals(1, firstRows.size());
+        assertEquals(1L, firstRows.get(0).getTotalApplications());
+        assertEquals(1, secondRows.size());
+        assertEquals(1L, secondRows.get(0).getTotalApplications());
     }
 
     private Fixture fixture(int capacity) {

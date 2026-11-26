@@ -1,0 +1,51 @@
+{
+  "annotations": {"list": []},
+  "editable": false,
+  "panels": [
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "id": 1,
+      "targets": [{"expr": "sum by (application) (hikaricp_connections_active)", "legendFormat": "{{application}} active", "refId": "A"}],
+      "title": "Active PostgreSQL connections",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "id": 2,
+      "targets": [
+        {"expr": "sum by (application) (hikaricp_connections_idle)", "legendFormat": "{{application}} idle", "refId": "A"},
+        {"expr": "sum by (application) (hikaricp_connections_max)", "legendFormat": "{{application}} max", "refId": "B"}
+      ],
+      "title": "Idle and maximum connection pool size",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "id": 3,
+      "targets": [{"expr": "sum by (application) (hikaricp_connections_pending)", "legendFormat": "{{application}} waiting", "refId": "A"}],
+      "title": "Requests waiting for a database connection",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "id": 4,
+      "options": {"content": "QueueGuard currently uses Spring Data Redis templates and Redis Streams. Redis command-level Micrometer metrics are not yet emitted by the application, so this dashboard intentionally does not display fabricated Redis operation/error series. Redis health is reported by the Actuator health endpoint where the Redis health indicator is available.", "mode": "markdown"},
+      "title": "Redis telemetry availability",
+      "type": "text"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["queueguard", "database", "redis"],
+  "time": {"from": "now-1h", "to": "now"},
+  "title": "QueueGuard Database and Redis",
+  "uid": "queueguard-database-redis",
+  "version": 1
+}

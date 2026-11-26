@@ -1,6 +1,8 @@
 package com.queueguard.qms.repo;
 
 import com.queueguard.qms.domain.InboxEvent;
+import com.queueguard.qms.domain.InboxEventStatus;
+import java.util.Collection;
 import java.util.Optional;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
@@ -8,6 +10,8 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface InboxEventRepository extends JpaRepository<InboxEvent, Long> {
+    long countByProcessingStatusIn(Collection<InboxEventStatus> statuses);
+
     @Modifying
     @Query(value = """
             INSERT INTO qms_event_inbox

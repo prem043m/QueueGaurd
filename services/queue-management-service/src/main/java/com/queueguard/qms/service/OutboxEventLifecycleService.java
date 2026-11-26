@@ -80,7 +80,9 @@ public class OutboxEventLifecycleService {
                 event.getCreatedAt(),
                 event.getIdempotencyKey(),
                 event.getClaimToken(),
-                event.getRetryCount());
+                event.getRetryCount(),
+                event.getTraceparent(),
+                event.getTracestate());
     }
 
     private static String describe(DataAccessException exception) {

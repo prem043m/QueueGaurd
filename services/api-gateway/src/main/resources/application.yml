@@ -2,6 +2,8 @@ server:
   port: ${SERVER_PORT:8080}
 
 spring:
+  config:
+    import: classpath:queueguard-observability.yml
   application:
     name: api-gateway
   datasource:
@@ -28,12 +30,6 @@ queueguard:
   fallback-limit-per-sec: ${FALLBACK_LIMIT_PER_SEC:5}
   fallback-burst: ${FALLBACK_BURST:10}
   audit-flush-ms: ${AUDIT_FLUSH_MS:2000}
-
-management:
-  endpoints:
-    web:
-      exposure:
-        include: health,info,metrics
 
 logging:
   level:

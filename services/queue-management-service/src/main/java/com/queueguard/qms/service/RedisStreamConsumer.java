@@ -2,6 +2,10 @@ package com.queueguard.qms.service;
 
 import com.queueguard.qms.service.InboxEventProcessingService.Disposition;
 import com.queueguard.qms.service.InboxEventProcessingService.ProcessingResult;
+import com.queueguard.qms.service.QmsEventMetrics.InboxOutcome;
+import io.micrometer.core.instrument.Timer;
+import io.micrometer.tracing.Span;
+import io.micrometer.tracing.Tracer;
 import jakarta.annotation.PreDestroy;
 import java.time.Duration;
 import java.util.List;
@@ -35,6 +39,9 @@ public class RedisStreamConsumer {
     private final InboxEventProcessingService processing;
     private final InboxEventFailureService failures;
     private final RedisDeadLetterPublisher deadLetterPublisher;
+    private final QmsEventMetrics metrics;
+    private final Tracer tracer;
+    private final OutboxTraceContext outboxTraceContext;
     private final String consumerIdentity;
     private final AtomicBoolean groupReady = new AtomicBoolean();
     private final AtomicBoolean stopping = new AtomicBoolean();
@@ -45,13 +52,19 @@ public class RedisStreamConsumer {
             ConsumerEventDeserializer deserializer,
             InboxEventProcessingService processing,
             InboxEventFailureService failures,
-            RedisDeadLetterPublisher deadLetterPublisher) {
+            RedisDeadLetterPublisher deadLetterPublisher,
+            QmsEventMetrics metrics,
+            Tracer tracer,
+            OutboxTraceContext outboxTraceContext) {
         this.redis = redis;
         this.properties = properties;
         this.deserializer = deserializer;
         this.processing = processing;
         this.failures = failures;
         this.deadLetterPublisher = deadLetterPublisher;
+        this.metrics = metrics;
+        this.tracer = tracer;
+        this.outboxTraceContext = outboxTraceContext;
         this.consumerIdentity = properties.uniqueConsumerIdentity();
     }
 
@@ -185,10 +198,41 @@ public class RedisStreamConsumer {
         if (stopping.get()) {
             return;
         }
+        Timer.Sample sample = metrics.startInboxTimer();
+        metrics.recordInbox(InboxOutcome.RECEIVED);
+        Span span = outboxTraceContext.consumerSpanBuilder(record.getValue())
+                .name("outbox.consume")
+                .kind(Span.Kind.CONSUMER)
+                .start();
+        try (Tracer.SpanInScope ignored = tracer.withSpan(span)) {
+            span.tag("messaging.system", "redis");
+            Object eventId = record.getValue().get("eventId");
+            if (eventId != null) {
+                span.tag("messaging.message.id", String.valueOf(eventId));
+            }
+            try {
+                processRecord(record, deliveryAttempt, span);
+            } catch (RuntimeException exception) {
+                span.error(exception);
+                throw exception;
+            }
+        } finally {
+            span.end();
+            metrics.stopInboxTimer(sample);
+        }
+    }
+
+    private void processRecord(
+            MapRecord<String, Object, Object> record,
+            int deliveryAttempt,
+            Span span) {
         ConsumerEvent event;
         try {
             event = deserializer.deserialize(record);
         } catch (PermanentEventException exception) {
+            metrics.recordInbox(InboxOutcome.FAILED);
+            span.tag("queueguard.outcome", "invalid_event");
+            span.error(exception);
             deadLetterAndAcknowledge(
                     record, null, deliveryAttempt, safeFailure(exception));
             return;
@@ -198,9 +242,12 @@ public class RedisStreamConsumer {
         try {
             result = processing.process(event, deliveryAttempt);
         } catch (RuntimeException exception) {
+            metrics.recordInbox(InboxOutcome.FAILED);
+            span.tag("queueguard.outcome", "failure");
+            span.error(exception);
             if (ConsumerFailureClassifier.classify(exception)
                     == ConsumerFailureClassifier.FailureKind.PERMANENT) {
-            int attempts = recordFailure(event, deliveryAttempt, exception);
+                int attempts = recordFailure(event, deliveryAttempt, exception);
                 deadLetterAndAcknowledge(
                         record, event, Math.max(deliveryAttempt, attempts),
                         safeFailure(exception));
@@ -208,21 +255,35 @@ public class RedisStreamConsumer {
                 int attempts = recordFailure(event, deliveryAttempt, exception);
                 if (attempts >= properties.maxAttempts()
                         || (attempts < 0 && deliveryAttempt >= properties.maxAttempts())) {
+                    metrics.recordInbox(InboxOutcome.EXHAUSTED);
                     deadLetterAndAcknowledge(
                             record, event, Math.max(deliveryAttempt, attempts),
                             safeFailure(exception));
+                } else if (attempts > 0) {
+                    metrics.recordInbox(InboxOutcome.RETRY_SCHEDULED);
+                    metrics.recordInboxRetry();
                 }
             }
             return;
         }
 
         if (result.disposition() == Disposition.EXHAUSTED) {
+            span.tag("queueguard.outcome", "exhausted");
+            metrics.recordInbox(InboxOutcome.EXHAUSTED);
             deadLetterAndAcknowledge(
                     record, event, result.attemptCount(),
                     safeFailureMessage(result.lastError()));
         } else if (result.disposition() == Disposition.ALREADY_DEAD_LETTERED) {
+            span.tag("queueguard.outcome", "already_dead_lettered");
+            metrics.recordInbox(InboxOutcome.ALREADY_DEAD_LETTERED);
+            acknowledge(record);
+        } else if (result.disposition() == Disposition.DUPLICATE) {
+            span.tag("queueguard.outcome", "duplicate");
+            metrics.recordInbox(InboxOutcome.DUPLICATE);
             acknowledge(record);
         } else {
+            span.tag("queueguard.outcome", "processed");
+            metrics.recordInbox(InboxOutcome.PROCESSED);
             acknowledge(record);
         }
     }
@@ -255,6 +316,7 @@ public class RedisStreamConsumer {
             deadLetterPublisher.publish(
                     fields, eventId, record.getId().getValue(),
                     Math.max(attemptCount, 1), reason);
+            metrics.recordInbox(InboxOutcome.DEAD_LETTERED);
         } catch (DataAccessException exception) {
             logRedisFailure("dead-letter publication", exception);
             return;

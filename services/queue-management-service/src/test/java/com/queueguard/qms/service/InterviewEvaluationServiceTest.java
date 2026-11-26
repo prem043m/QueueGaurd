@@ -38,7 +38,7 @@ class InterviewEvaluationServiceTest {
         outboxEvents = mock(OutboxEventRepository.class);
         access = mock(Phase3Access.class);
         service = new InterviewEvaluationService(candidateRounds, evaluations, assignments,
-                outboxEvents, access, new ObjectMapper());
+                outboxEvents, access, new ObjectMapper(), mock(OutboxTraceContext.class));
     }
 
     @Test
