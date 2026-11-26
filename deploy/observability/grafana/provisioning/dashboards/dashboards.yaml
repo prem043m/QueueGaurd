@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: QueueGuard
+    orgId: 1
+    folder: QueueGuard
+    type: file
+    disableDeletion: true
+    editable: false
+    options:
+      path: /var/lib/grafana/dashboards

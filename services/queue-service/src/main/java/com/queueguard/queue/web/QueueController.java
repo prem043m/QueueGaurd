@@ -49,7 +49,8 @@ public class QueueController {
     // ------------------------------------------------------------- consumers
 
     @PostMapping("/queues/{name}/claim")
-    public ApiResponse<ClaimResponse> claim(@PathVariable String name, @RequestBody(required = false) ClaimRequest req) {
+    public ApiResponse<ClaimResponse> claim(@PathVariable String name,
+                                            @Valid @RequestBody(required = false) ClaimRequest req) {
         return ApiResponse.ok(queueService.claim(name, req == null ? new ClaimRequest(1, "anonymous-worker") : req));
     }
 

@@ -1,0 +1,40 @@
+discovery.docker "queueguard" {
+  host             = "unix:///var/run/docker.sock"
+  refresh_interval = "10s"
+}
+
+discovery.relabel "queueguard" {
+  targets = discovery.docker.queueguard.targets
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service_name"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    target_label  = "compose_project"
+  }
+}
+
+loki.source.docker "queueguard" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.relabel.queueguard.output
+  forward_to = [loki.process.queueguard.receiver]
+}
+
+loki.process "queueguard" {
+  stage.static_labels {
+    values = {
+      environment = "local",
+    }
+  }
+
+  forward_to = [loki.write.local.receiver]
+}
+
+loki.write "local" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

@@ -66,9 +66,10 @@ curl -s -X POST $BASE/api/auth/register -H 'Content-Type: application/json' \
 TOKEN=$(curl -s -X POST $BASE/api/auth/login -H 'Content-Type: application/json' \
   -d '{"email":"you@demo.local","password":"DemoPass!123"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["data"]["token"])')
 
-# 2. create a queue and enqueue work
-curl -s -X POST $BASE/api/queues -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"name":"default","maxConcurrency":16,"maxAttempts":5}'
+# 2. the Compose stack provisions the global infrastructure queue `default`.
+# For a standalone deployment, create it once before enqueueing:
+# curl -s -X POST $BASE/api/queues -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+#   -d '{"name":"default","maxConcurrency":16,"maxAttempts":5}'
 curl -s -X POST $BASE/api/queues/default/messages -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' -H 'Idempotency-Key: job-1' \
   -d '{"payload":"{\"workMs\":100}","priority":7}'

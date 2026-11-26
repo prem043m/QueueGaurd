@@ -1,0 +1,83 @@
+{
+  "annotations": {"list": []},
+  "editable": false,
+  "panels": [
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "id": 1,
+      "targets": [{"expr": "sum by (result) (rate(queueguard_queue_messages_total[5m]))", "legendFormat": "{{result}}", "refId": "A"}],
+      "title": "Infrastructure queue message outcomes",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "id": 2,
+      "targets": [{"expr": "sum by (outcome) (rate(queueguard_outbox_events_total[5m]))", "legendFormat": "{{outcome}}", "refId": "A"}],
+      "title": "Outbox publication outcomes",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "id": 3,
+      "targets": [{"expr": "sum by (outcome) (rate(queueguard_inbox_events_total[5m]))", "legendFormat": "{{outcome}}", "refId": "A"}],
+      "title": "Inbox processing outcomes (duplicates are separate)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "id": 4,
+      "targets": [{"expr": "rate(queueguard_inbox_retry_attempts_total[5m])", "legendFormat": "retries/s", "refId": "A"}],
+      "title": "Inbox retry attempts",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+      "id": 5,
+      "targets": [{"expr": "queueguard_outbox_pending", "legendFormat": "pending outbox", "refId": "A"}],
+      "title": "Pending outbox events (PENDING + PROCESSING)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+      "id": 6,
+      "targets": [
+        {"expr": "queueguard_inbox_pending", "legendFormat": "pending inbox", "refId": "A"},
+        {"expr": "queueguard_outbox_oldest_pending_age_seconds", "legendFormat": "oldest outbox pending age (s)", "refId": "B"}
+      ],
+      "title": "Pending work and oldest outbox event age",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 24},
+      "id": 7,
+      "targets": [
+        {"expr": "queueguard_queue_pending", "legendFormat": "queue pending", "refId": "A"},
+        {"expr": "queueguard_queue_claimed", "legendFormat": "queue claimed", "refId": "B"},
+        {"expr": "queueguard_queue_state_snapshot_age_seconds", "legendFormat": "snapshot age (s)", "refId": "C"}
+      ],
+      "title": "Infrastructure queue workload (snapshot from existing queue listing)",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "15s",
+  "schemaVersion": 39,
+  "tags": ["queueguard", "queue", "events"],
+  "time": {"from": "now-1h", "to": "now"},
+  "title": "QueueGuard Queue and Event Processing",
+  "uid": "queueguard-queue-event-processing",
+  "version": 1
+}

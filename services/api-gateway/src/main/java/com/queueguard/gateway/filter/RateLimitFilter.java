@@ -4,12 +4,15 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.queueguard.common.dto.ApiResponse;
+import com.queueguard.common.observability.TraceContextHttpClient;
 import com.queueguard.gateway.entity.AuditLog;
 import com.queueguard.gateway.net.AuditBuffer;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import io.micrometer.tracing.Tracer;
+import io.micrometer.tracing.propagation.Propagator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -44,6 +47,8 @@ public class RateLimitFilter extends OncePerRequestFilter {
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build();
     private final String rateLimitUrl;
     private final AuditBuffer audit;
+    private final Tracer tracer;
+    private final Propagator propagator;
 
     private static final class Bucket {
         double tokens;
@@ -57,11 +62,15 @@ public class RateLimitFilter extends OncePerRequestFilter {
     public RateLimitFilter(@Value("${queueguard.svc.ratelimit}") String rateLimitUrl,
                            AuditBuffer audit,
                            @Value("${queueguard.fallback-limit-per-sec:5}") double fallbackLimitPerSec,
-                           @Value("${queueguard.fallback-burst:10}") double fallbackBurst) {
+                           @Value("${queueguard.fallback-burst:10}") double fallbackBurst,
+                           Tracer tracer,
+                           Propagator propagator) {
         this.rateLimitUrl = rateLimitUrl.endsWith("/") ? rateLimitUrl.substring(0, rateLimitUrl.length() - 1) : rateLimitUrl;
         this.audit = audit;
         this.fallbackLimitPerSec = fallbackLimitPerSec;
         this.fallbackBurst = fallbackBurst;
+        this.tracer = tracer;
+        this.propagator = propagator;
     }
 
     @Override
@@ -118,13 +127,14 @@ public class RateLimitFilter extends OncePerRequestFilter {
         body.put("ip", ip);
         body.put("path", path);
         body.put("cost", 1);
-        HttpRequest req = HttpRequest.newBuilder()
+        HttpRequest.Builder request = HttpRequest.newBuilder()
                 .uri(URI.create(rateLimitUrl + "/ratelimit/check"))
                 .timeout(Duration.ofMillis(1500))
                 .header("Content-Type", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(body)))
-                .build();
-        HttpResponse<String> res = http.send(req, HttpResponse.BodyHandlers.ofString());
+                .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(body)));
+        HttpResponse<String> res = TraceContextHttpClient.send(
+                http, request, HttpResponse.BodyHandlers.ofString(),
+                tracer, propagator, "rate-limit-service");
         if (res.statusCode() != 200) {
             return null;
         }

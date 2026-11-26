@@ -1,6 +1,6 @@
 package com.queueguard.common.observability;
 
-import io.micrometer.observation.Observation;
+import io.micrometer.common.KeyValue;
 import io.micrometer.observation.ObservationFilter;
 import io.micrometer.observation.ObservationRegistry;
 import io.lettuce.core.tracing.MicrometerTracing;
@@ -19,6 +19,11 @@ public class QueueGuardObservationAutoConfiguration {
             if (context.getName().startsWith("jdbc.")) {
                 context.removeHighCardinalityKeyValue("db.statement");
                 context.removeHighCardinalityKeyValue("db.query.text");
+                context.getHighCardinalityKeyValues().stream()
+                        .map(KeyValue::getKey)
+                        .filter(key -> key.startsWith("jdbc.query["))
+                        .toList()
+                        .forEach(context::removeHighCardinalityKeyValue);
             }
             return context;
         };

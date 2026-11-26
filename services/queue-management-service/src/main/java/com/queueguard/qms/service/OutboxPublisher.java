@@ -1,7 +1,11 @@
 package com.queueguard.qms.service;
 
 import com.queueguard.qms.service.OutboxEventLifecycleService.FailureDisposition;
+import com.queueguard.qms.service.QmsEventMetrics.OutboxOutcome;
+import com.queueguard.common.observability.TraceContextHttpClient;
+import io.micrometer.core.instrument.Timer;
 import java.util.List;
+import io.micrometer.tracing.Tracer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -16,12 +20,18 @@ public class OutboxPublisher {
 
     private final OutboxEventLifecycleService lifecycle;
     private final RedisStreamPublisher streamPublisher;
+    private final QmsEventMetrics metrics;
+    private final Tracer tracer;
 
     public OutboxPublisher(
             OutboxEventLifecycleService lifecycle,
-            RedisStreamPublisher streamPublisher) {
+            RedisStreamPublisher streamPublisher,
+            QmsEventMetrics metrics,
+            Tracer tracer) {
         this.lifecycle = lifecycle;
         this.streamPublisher = streamPublisher;
+        this.metrics = metrics;
+        this.tracer = tracer;
     }
 
     @Scheduled(fixedDelayString = "${queueguard.outbox.polling-interval-ms:1000}")
@@ -30,32 +40,51 @@ public class OutboxPublisher {
         try {
             events = lifecycle.claimBatch();
         } catch (DataAccessException exception) {
+            metrics.recordOutbox(OutboxOutcome.CLAIM_FAILURE);
             LOGGER.error("Unable to claim QMS outbox events: {}",
                     exception.getClass().getSimpleName());
             return;
         }
 
         for (ClaimedOutboxEvent event : events) {
-            try {
-                streamPublisher.publish(event);
-            } catch (DataAccessException redisFailure) {
-                if (!recordFailure(event, redisFailure)) {
+            Timer.Sample sample = metrics.startOutboxTimer();
+            try (TraceContextHttpClient.ScopedSpan span =
+                         TraceContextHttpClient.startSpan(tracer, "messaging.publish", "redis")) {
+                span.tag("messaging.system", "redis");
+                span.tag("messaging.message.id", event.id().toString());
+                try {
+                    streamPublisher.publish(event);
+                } catch (DataAccessException redisFailure) {
+                    span.tag("queueguard.outcome", "publish_failure");
+                    span.error(redisFailure);
+                    metrics.recordOutbox(OutboxOutcome.PUBLISH_FAILURE);
+                    if (!recordFailure(event, redisFailure)) {
+                        return;
+                    }
+                    continue;
+                }
+                span.tag("queueguard.outcome", "published");
+                metrics.recordOutbox(OutboxOutcome.PUBLISHED);
+
+                try {
+                    if (!lifecycle.markPublished(event)) {
+                        span.tag("queueguard.outcome", "stale_claim");
+                        metrics.recordOutbox(OutboxOutcome.STALE_CLAIM);
+                        LOGGER.warn("Outbox event {} was published after its claim expired",
+                                event.id());
+                    }
+                } catch (DataAccessException databaseFailure) {
+                    span.tag("queueguard.outcome", "mark_failure");
+                    span.error(databaseFailure);
+                    metrics.recordOutbox(OutboxOutcome.MARK_FAILURE);
+                    LOGGER.error(
+                            "Could not mark published outbox event {}; it will be recovered by its lease ({})",
+                            event.id(),
+                            databaseFailure.getClass().getSimpleName());
                     return;
                 }
-                continue;
-            }
-
-            try {
-                if (!lifecycle.markPublished(event)) {
-                    LOGGER.warn("Outbox event {} was published after its claim expired",
-                            event.id());
-                }
-            } catch (DataAccessException databaseFailure) {
-                LOGGER.error(
-                        "Could not mark published outbox event {}; it will be recovered by its lease ({})",
-                        event.id(),
-                        databaseFailure.getClass().getSimpleName());
-                return;
+            } finally {
+                metrics.stopOutboxTimer(sample);
             }
         }
     }
@@ -65,10 +94,13 @@ public class OutboxPublisher {
         try {
             FailureDisposition disposition = lifecycle.recordFailure(event, redisFailure);
             if (disposition == FailureDisposition.EXHAUSTED) {
+                metrics.recordOutbox(OutboxOutcome.EXHAUSTED);
                 LOGGER.error("Outbox event {} exhausted its publication attempts", event.id());
             } else if (disposition == FailureDisposition.STALE_CLAIM) {
+                metrics.recordOutbox(OutboxOutcome.STALE_CLAIM);
                 LOGGER.info("Outbox event {} failure belongs to an expired claim", event.id());
             } else {
+                metrics.recordOutbox(OutboxOutcome.RETRY_SCHEDULED);
                 LOGGER.warn("Redis Stream publication failed for outbox event {} ({})",
                         event.id(), redisFailure.getClass().getSimpleName());
             }

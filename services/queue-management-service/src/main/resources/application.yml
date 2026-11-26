@@ -1,6 +1,8 @@
 server:
   port: ${SERVER_PORT:8086}
 spring:
+  config:
+    import: classpath:queueguard-observability.yml
   application:
     name: queue-management-service
   datasource:
@@ -48,8 +50,3 @@ queueguard:
     initial-retry-delay-ms: ${OUTBOX_CONSUMER_INITIAL_RETRY_DELAY_MS:1000}
     max-retry-delay-ms: ${OUTBOX_CONSUMER_MAX_RETRY_DELAY_MS:300000}
     dead-letter-stream-key: ${OUTBOX_DEAD_LETTER_STREAM_KEY:qg:qms:outbox:dead-letter}
-management:
-  endpoints:
-    web:
-      exposure:
-        include: health,info,metrics

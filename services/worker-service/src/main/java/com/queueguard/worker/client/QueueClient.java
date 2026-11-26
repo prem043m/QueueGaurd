@@ -2,7 +2,10 @@ package com.queueguard.worker.client;
 
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.queueguard.common.observability.TraceContextHttpClient;
 import com.queueguard.worker.dto.WorkerDtos.*;
+import io.micrometer.tracing.Tracer;
+import io.micrometer.tracing.propagation.Propagator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -31,11 +34,17 @@ public class QueueClient {
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
     private final String baseUrl;
     private final String workerId;
+    private final Tracer tracer;
+    private final Propagator propagator;
 
     public QueueClient(@Value("${queueguard.queue-url:http://localhost:8082}") String baseUrl,
-                       @Value("${queueguard.worker-id:worker-1}") String workerId) {
+                       @Value("${queueguard.worker-id:worker-1}") String workerId,
+                       Tracer tracer,
+                       Propagator propagator) {
         this.baseUrl = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
         this.workerId = workerId;
+        this.tracer = tracer;
+        this.propagator = propagator;
     }
 
     public String workerId() {
@@ -53,6 +62,12 @@ public class QueueClient {
             return env.data().messages().stream()
                     .map(m -> new Task(m.id(), m.queue(), m.payload(), m.priority(), m.attempts()))
                     .toList();
+        } catch (QueueClientHttpException e) {
+            if (e.statusCode() == 404) {
+                throw new QueueNotFoundException(queue);
+            }
+            log.debug("claim({}) failed with HTTP {}: {}", queue, e.statusCode(), e.getMessage());
+            return List.of();
         } catch (Exception e) {
             log.debug("claim({}) failed: {}", queue, e.getMessage());
             return List.of();
@@ -82,16 +97,30 @@ public class QueueClient {
     }
 
     private <T> T post(String path, Object body, com.fasterxml.jackson.core.type.TypeReference<T> type) throws Exception {
-        HttpRequest req = HttpRequest.newBuilder()
+        HttpRequest.Builder request = HttpRequest.newBuilder()
                 .uri(URI.create(baseUrl + path))
                 .timeout(Duration.ofSeconds(5))
                 .header("Content-Type", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(body)))
-                .build();
-        HttpResponse<String> res = http.send(req, HttpResponse.BodyHandlers.ofString());
+                .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(body)));
+        HttpResponse<String> res = TraceContextHttpClient.send(
+                http, request, HttpResponse.BodyHandlers.ofString(),
+                tracer, propagator, "queue-service");
         if (res.statusCode() >= 300) {
-            throw new IllegalStateException("HTTP " + res.statusCode() + " from queue-service" + path);
+            throw new QueueClientHttpException(res.statusCode(), path);
         }
         return mapper.readValue(res.body(), type);
+    }
+
+    private static final class QueueClientHttpException extends RuntimeException {
+        private final int statusCode;
+
+        private QueueClientHttpException(int statusCode, String path) {
+            super("HTTP " + statusCode + " from queue-service" + path);
+            this.statusCode = statusCode;
+        }
+
+        private int statusCode() {
+            return statusCode;
+        }
     }
 }

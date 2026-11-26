@@ -1,6 +1,9 @@
 package com.queueguard.gateway.net;
 
+import com.queueguard.common.observability.TraceContextHttpClient;
 import jakarta.annotation.PostConstruct;
+import io.micrometer.tracing.Tracer;
+import io.micrometer.tracing.propagation.Propagator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -37,6 +40,8 @@ public class ProxyClient {
     private final String rateLimitUrl;
     private final String monitorUrl;
     private final String qmsUrl;
+    private final Tracer tracer;
+    private final Propagator propagator;
 
     private final Map<String, CircuitBreaker> breakers = new HashMap<>();
 
@@ -45,13 +50,17 @@ public class ProxyClient {
                        @Value("${queueguard.svc.worker}") String workerUrl,
                        @Value("${queueguard.svc.ratelimit}") String rateLimitUrl,
                        @Value("${queueguard.svc.monitor}") String monitorUrl,
-                       @Value("${queueguard.svc.qms}") String qmsUrl) {
+                       @Value("${queueguard.svc.qms}") String qmsUrl,
+                       Tracer tracer,
+                       Propagator propagator) {
         this.authUrl = trim(authUrl);
         this.queueUrl = trim(queueUrl);
         this.workerUrl = trim(workerUrl);
         this.rateLimitUrl = trim(rateLimitUrl);
         this.monitorUrl = trim(monitorUrl);
         this.qmsUrl = trim(qmsUrl);
+        this.tracer = tracer;
+        this.propagator = propagator;
     }
 
     @PostConstruct
@@ -116,7 +125,8 @@ public class ProxyClient {
                 .timeout(Duration.ofSeconds(15));
 
         for (Map.Entry<String, String> h : inboundHeaders.entrySet()) {
-            if (!HOP_BY_HOP.contains(h.getKey().toLowerCase())) {
+            if (!HOP_BY_HOP.contains(h.getKey().toLowerCase())
+                    && !h.getKey().equalsIgnoreCase("traceparent")) {
                 builder.header(h.getKey(), h.getValue());
             }
         }
@@ -128,7 +138,9 @@ public class ProxyClient {
         builder.method(method, publisher);
 
         try {
-            HttpResponse<byte[]> res = http.send(builder.build(), HttpResponse.BodyHandlers.ofByteArray());
+            HttpResponse<byte[]> res = TraceContextHttpClient.send(
+                    http, builder, HttpResponse.BodyHandlers.ofByteArray(),
+                    tracer, propagator, route.service());
             if (breaker != null) {
                 breaker.onSuccess();
             }
